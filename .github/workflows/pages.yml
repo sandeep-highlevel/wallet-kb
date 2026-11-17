@@ -1,8 +1,8 @@
 name: Deploy to GitHub Pages
 
+# Manual only: a personal-account Pages site is public. Re-enable `push` only once this
+# deploys to an org repo with private (org-members-only) Pages visibility.
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 permissions:

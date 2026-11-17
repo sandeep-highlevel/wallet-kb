@@ -41,4 +41,5 @@ them by hand when the devtools versions change.
 
 ## Deploy
 
-Every push to `main` runs `.github/workflows/pages.yml`: test, build, deploy to Pages.
+`.github/workflows/pages.yml` (manual trigger) tests, builds and deploys to Pages. Run it only
+from an org-owned repo whose Pages visibility is private; Pages on a personal account is public.
