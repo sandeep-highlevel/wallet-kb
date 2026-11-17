@@ -1,0 +1,28 @@
+{
+  "name": "wallet-kb",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --port 5174",
+    "build": "vite build",
+    "preview": "vite preview --port 5174",
+    "test": "vitest run",
+    "sync": "bash scripts/sync-from-devtools.sh"
+  },
+  "dependencies": {
+    "gsap": "3.13",
+    "vue": "^3.5.45",
+    "vue-router": "^4.6.5"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.5",
+    "@vitejs/plugin-vue": "^5.2.4",
+    "@vue/test-utils": "^2.6.0",
+    "jsdom": "^25.0.1",
+    "tailwindcss": "^4.3.5",
+    "typescript": "^5.9.3",
+    "vite": "^5.4.21",
+    "vitest": "^2.1.9"
+  }
+}

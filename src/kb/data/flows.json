@@ -1,0 +1,4010 @@
+{
+  "flows": [
+    {
+      "id": "company_wallet_setup",
+      "name": "Company wallet setup",
+      "group": "Setup & lifecycle",
+      "subject": "company",
+      "apps": ["blade-platform"],
+      "trigger": "Company-created CDC event on revex-blade-wallet-setup-events, or recovery re-enqueue from pending settlement",
+      "instanceKey": "companyId (recovery: companyId:reason)",
+      "summary": "The wallet-setup worker creates the agency wallet with complimentary FREE_CREDITS, then fires Pendo/audit and the default usage-alert setup. Pending settlement re-enqueues setup when it finds no company wallet.",
+      "steps": [
+        {
+          "name": "received_company_created",
+          "title": "Wallet-setup worker receives message",
+          "detail": "Worker pulls company-created CDC message and hands it to the helper.",
+          "kind": "pubsub-worker",
+          "channel": "revex-blade-wallet-setup-events",
+          "repo": "revex",
+          "path": "apps/blade-platform/workers/revex-blade-wallet-setup-worker.ts",
+          "line": 27,
+          "state": "RECEIVED"
+        },
+        {
+          "name": "message_shape_checked",
+          "title": "Helper validates COMPANY create shape",
+          "detail": "Only model=COMPANY with after.id and no before is processed.",
+          "kind": "pubsub-worker",
+          "channel": "revex-blade-wallet-setup-events",
+          "repo": "revex",
+          "path": "apps/blade-platform/workers/helper/walleSetupHelper.ts",
+          "line": 73,
+          "state": "VALIDATED"
+        },
+        {
+          "name": "check_existing_wallet",
+          "title": "Check for existing wallet",
+          "detail": "Service wraps queries; skip if companywallets already has the company.",
+          "kind": "service",
+          "channel": "",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/CompanyWallet/companyWallet.queries.ts",
+          "line": 223,
+          "state": "CHECKED"
+        },
+        {
+          "name": "insert_company_wallet",
+          "title": "Create wallet in Mongo txn",
+          "detail": "Inserts companywallets doc with default recharge config and complimentary credits.",
+          "kind": "service",
+          "channel": "",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/CompanyWallet/companyWallet.queries.ts",
+          "line": 417,
+          "state": "WALLET_CREATED"
+        },
+        {
+          "name": "grant_setup_free_credits",
+          "title": "Grant FREE_CREDITS txn",
+          "detail": "Writes COMPLETED FREE_CREDITS txn and emits settled-charge metric; skipped for sandbox.",
+          "kind": "service",
+          "channel": "",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/CompanyWallet/companyWallet.queries.ts",
+          "line": 463,
+          "state": "CREDITED"
+        },
+        {
+          "name": "emit_wallet_created_events",
+          "title": "Pendo + audit event",
+          "detail": "Emits 'Agency Wallet Created' Pendo event and audit log; errors swallowed.",
+          "kind": "service",
+          "channel": "",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/CompanyWallet/companyWallet.queries.ts",
+          "line": 337,
+          "state": "NOTIFIED"
+        },
+        {
+          "name": "publish_default_usage_alert_setup",
+          "title": "Publish default usage-alert setup",
+          "detail": "Publishes REVEX_BLADE_SETUP_DEFAULT_WALLET_USAGE_ALERT; skipped for sandbox, errors swallowed.",
+          "kind": "service",
+          "channel": "revex-blade-wallet-usage-notification-events",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/CompanyWallet/companyWallet.queries.ts",
+          "line": 371,
+          "state": "ALERT_SETUP_QUEUED"
+        },
+        {
+          "name": "default_usage_alert_created",
+          "title": "Create default spending alerts",
+          "detail": "Notification worker upserts notificationconfig and AGENCY + SUB_ACCOUNT usagethreshold docs.",
+          "kind": "pubsub-worker",
+          "channel": "revex-blade-wallet-usage-notification-events",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/NotificationConfig/notification-config.service.ts",
+          "line": 2143,
+          "state": "ALERTS_CREATED"
+        },
+        {
+          "name": "missing_wallet_recovery_requested",
+          "title": "Recovery: pending settlement finds no wallet",
+          "detail": "Wallet worker requests setup with Redis dedupe (1h) and reason pending-settlement-wallet-not-found.",
+          "kind": "pubsub-worker",
+          "channel": "saas-wallet-service",
+          "repo": "revex",
+          "path": "apps/blade-platform/workers/helper/wallet-worker/services/walletMissingCompanySetupRecovery.service.ts",
+          "line": 19,
+          "state": "RECOVERY_REQUESTED"
+        },
+        {
+          "name": "publish_pending_settlement_retry",
+          "title": "Recovery: retry pending settlement",
+          "detail": "After recovery setup succeeds, helper republishes pending-transaction-event.",
+          "kind": "pubsub-worker",
+          "channel": "saas-wallet-service",
+          "repo": "revex",
+          "path": "apps/blade-platform/workers/helper/walletSetupRecoveryRetry.publisher.ts",
+          "line": 11,
+          "state": "SETTLEMENT_RETRY_QUEUED"
+        }
+      ],
+      "terminal": {
+        "success": [
+          "wallet created + FREE_CREDITS granted",
+          "skipped: wallet already exists",
+          "skipped: company 404"
+        ],
+        "failure": [
+          "companies API / insert error: nack and redeliver (self-heals as already-exists)",
+          "non-create message shape: success=false, loops to DLQ"
+        ]
+      },
+      "gotchas": [
+        "Non-create messages (has before, or model != COMPANY) keep success=false and nack until DLQ, with no log (walleSetupHelper.ts:73-78).",
+        "createCompanyWallet rethrows a new Error, so the error.code 11000 duplicate check at companyWallet.queries.ts:286 never matches.",
+        "Pendo/audit and default usage-alert publish failures are swallowed; only error logs show a partial setup."
+      ]
+    },
+    {
+      "id": "location_wallet_setup",
+      "name": "Location wallet setup",
+      "group": "Setup & lifecycle",
+      "subject": "location",
+      "apps": ["saas", "billing", "saas-service"],
+      "trigger": "SaaS enable for a location, billing LOCATION CDC (saasMode activated, no plan), BaaS config API, or saas-service location update / fix-up jobs",
+      "instanceKey": "locationId (SaaS path: locationId_subscriptionId_status)",
+      "summary": "Location wallets are created in saas-service, not blade-platform. Requests arrive as wallet-setup (billing, saas-service) or setup-wallet-and-complementary-credits (SaaS enable) messages.",
+      "steps": [
+        {
+          "name": "saas_enabled",
+          "title": "SaaS enabled for location",
+          "detail": "setupSaaS runs complimentaryCreditsSetup for the location.",
+          "kind": "api",
+          "channel": "",
+          "repo": "revex",
+          "path": "apps/saas/src/saasConfig/saasConfig.service.ts",
+          "line": 638,
+          "state": "SAAS_ENABLING"
+        },
+        {
+          "name": "wallet_and_credits_setup_published",
+          "title": "Publish wallet + complimentary credits setup",
+          "detail": "Publishes setup-wallet-and-complementary-credits to the stripe-worker topic.",
+          "kind": "service",
+          "channel": "setup-wallet-and-complementary-credits",
+          "repo": "revex",
+          "path": "apps/saas/src/utils/pubsubHelper.ts",
+          "line": 146,
+          "state": "SETUP_QUEUED"
+        },
+        {
+          "name": "saas_wallet_setup_received",
+          "title": "saas-service stripe worker sets up wallet",
+          "detail": "Unique instance (WalletSetup) guards; runs payment-method + wallet setup, then sets saas_mode ACTIVATED or SETUP_PENDING.",
+          "kind": "pubsub-worker",
+          "channel": "setup-wallet-and-complementary-credits",
+          "repo": "saas",
+          "path": "src/handlers/saasConfig/saasConfig.service.ts",
+          "line": 2852,
+          "state": "SETTING_UP"
+        },
+        {
+          "name": "wallet_and_credits_created",
+          "title": "Create wallet + complementary credit",
+          "detail": "setupWalletAndComplementaryCredit creates the location wallet and credit txn.",
+          "kind": "service",
+          "channel": "",
+          "repo": "saas",
+          "path": "src/handlers/subscriptionPlans/index.ts",
+          "line": 854,
+          "state": "WALLET_CREATED"
+        },
+        {
+          "name": "billing_location_cdc",
+          "title": "Billing worker: LOCATION model change",
+          "detail": "saasMode became activated with no saasPlanId; create bill config from global config.",
+          "kind": "cdc/change-stream",
+          "channel": "revex-blade-billing-events",
+          "repo": "revex",
+          "path": "apps/billing/workers/helper/revexBillingWorker.helper.ts",
+          "line": 230,
+          "state": "BILL_CONFIG_PENDING"
+        },
+        {
+          "name": "bill_config_created_from_global",
+          "title": "Create location bill config",
+          "detail": "processBillConfigCreationFromGlobalConfig writes baasconfigs then requests wallet setup.",
+          "kind": "service",
+          "channel": "",
+          "repo": "revex",
+          "path": "apps/billing/src/services/baasConfig.service.ts",
+          "line": 1585,
+          "state": "BILL_CONFIG_CREATED"
+        },
+        {
+          "name": "wallet_setup_requested",
+          "title": "Publish wallet-setup request",
+          "detail": "publishQueueSetupWalletRequest sends type wallet-setup (creator saas-billing) to saas-service.",
+          "kind": "service",
+          "channel": "saas-service / wallet-setup",
+          "repo": "revex",
+          "path": "apps/billing/common/services/pubsub.services.ts",
+          "line": 13,
+          "state": "SETUP_QUEUED"
+        },
+        {
+          "name": "saas_service_fixups",
+          "title": "saas-service self-requests",
+          "detail": "Location update and fix-up jobs re-queue wallet-setup when an activated location has no wallet.",
+          "kind": "service",
+          "channel": "saas-service / wallet-setup",
+          "repo": "saas",
+          "path": "src/handlers/wallet/wallet.controller.ts",
+          "line": 9,
+          "state": "SETUP_QUEUED"
+        },
+        {
+          "name": "wallet_setup_received",
+          "title": "saas-service worker handles wallet-setup",
+          "detail": "Main saas worker routes WALLET_SETUP to WalletController.setupWallet.",
+          "kind": "pubsub-worker",
+          "channel": "saas-service / wallet-setup",
+          "repo": "saas",
+          "path": "src/worker.ts",
+          "line": 115,
+          "state": "RECEIVED"
+        },
+        {
+          "name": "location_wallet_created",
+          "title": "Create location wallet",
+          "detail": "setupLocationWallet checks location + saas_mode, creates locationwallets doc and opening txn.",
+          "kind": "service",
+          "channel": "",
+          "repo": "saas",
+          "path": "src/handlers/wallet/wallet.services.ts",
+          "line": 609,
+          "state": "ACTIVE"
+        },
+        {
+          "name": "setup_result_classified",
+          "title": "Classify result and ack",
+          "detail": "1001/1002/11000 are acked as skipped; other errors nack.",
+          "kind": "pubsub-worker",
+          "channel": "",
+          "repo": "saas",
+          "path": "src/handlers/wallet/wallet.controller.ts",
+          "line": 16,
+          "state": "DONE"
+        }
+      ],
+      "terminal": {
+        "success": [
+          "wallet created (log 'Wallet created: {id}')",
+          "skipped: SaaS not activated (1001)",
+          "skipped: location not found (1002)",
+          "skipped: wallet already exists (11000)"
+        ],
+        "failure": [
+          "other error: processed=false, nack and redeliver",
+          "SaaS path: saas_mode left SETUP_PENDING"
+        ]
+      },
+      "gotchas": [
+        "No blade-platform emitter: REVEX_BLADE_LOCATION_WALLET_SETUP handler in complimentaryCreditWorker.helper.ts is a dead TODO stub.",
+        "Two different message types create location wallets (wallet-setup and setup-wallet-and-complementary-credits), with different dedupe (none vs WalletSetup unique instance)."
+      ]
+    },
+    {
+      "id": "wallet_status_change",
+      "name": "Wallet status change",
+      "group": "Setup & lifecycle",
+      "subject": "company / location",
+      "apps": ["blade-platform"],
+      "trigger": "Platform CDC model-change {model, before, after} on saas-wallet-service when activeStatusDetails or deleted changes",
+      "instanceKey": "entityType:entityId:activeStatusDetails.updatedAt",
+      "summary": "The wallet worker maps agency or location active-status changes (suspend, pause, reactivate, delete) to wallet ACTIVE/INACTIVE, writes status history and refreshes the fund-check cache.",
+      "steps": [
+        {
+          "name": "model_change_received",
+          "title": "Wallet worker receives model-change",
+          "detail": "Routes model-change messages to the status handler.",
+          "kind": "cdc/change-stream",
+          "channel": "saas-wallet-service",
+          "repo": "revex",
+          "path": "apps/blade-platform/workers/helper/wallet-worker/walletWorker.helper.ts",
+          "line": 60,
+          "state": "RECEIVED"
+        },
+        {
+          "name": "message_validated",
+          "title": "Validate and filter",
+          "detail": "Rejects invalid payloads and purged sub-accounts (acked, no wallet write).",
+          "kind": "pubsub-worker",
+          "channel": "",
+          "repo": "revex",
+          "path": "apps/blade-platform/workers/helper/wallet-worker/modelChangeStatus.handler.ts",
+          "line": 56,
+          "state": "VALIDATED"
+        },
+        {
+          "name": "status_lock_acquired",
+          "title": "Acquire status unique instance",
+          "detail": "UniqueInstance WalletStatusUpdate (TTL 600s); busy lock returns false and nacks.",
+          "kind": "service",
+          "channel": "",
+          "repo": "revex",
+          "path": "apps/blade-platform/workers/helper/wallet-worker/modelChangeStatus.handler.ts",
+          "line": 168,
+          "state": "LOCKED"
+        },
+        {
+          "name": "stale_check",
+          "title": "Skip stale updates",
+          "detail": "Redis last-updatedAt guard (24h) drops out-of-order messages.",
+          "kind": "service",
+          "channel": "",
+          "repo": "revex",
+          "path": "apps/blade-platform/workers/helper/wallet-worker/modelChangeStatus.handler.ts",
+          "line": 190,
+          "state": "CURRENT"
+        },
+        {
+          "name": "wallet_status_updated",
+          "title": "Set wallet ACTIVE/INACTIVE",
+          "detail": "Processor finds wallet and sets status plus lastActivatedAt/lastDeactivatedAt.",
+          "kind": "service",
+          "channel": "",
+          "repo": "revex",
+          "path": "apps/blade-platform/workers/helper/wallet-worker/modelChangeStatus.processor.ts",
+          "line": 43,
+          "state": "ACTIVE | INACTIVE"
+        },
+        {
+          "name": "status_persisted",
+          "title": "Write wallet status",
+          "detail": "Persistence $set on the company or location wallet.",
+          "kind": "service",
+          "channel": "",
+          "repo": "revex",
+          "path": "apps/blade-platform/workers/helper/wallet-worker/modelChangeStatus.persistence.ts",
+          "line": 79,
+          "state": "PERSISTED"
+        },
+        {
+          "name": "status_history_written",
+          "title": "Write status history",
+          "detail": "Inserts companywalletstatushistories / locationwalletstatushistories row.",
+          "kind": "service",
+          "channel": "",
+          "repo": "revex",
+          "path": "apps/blade-platform/workers/helper/wallet-worker/modelChangeStatus.persistence.ts",
+          "line": 162,
+          "state": "HISTORY_WRITTEN"
+        },
+        {
+          "name": "status_lock_released",
+          "title": "Release status instance",
+          "detail": "Releases the unique instance after processing.",
+          "kind": "service",
+          "channel": "",
+          "repo": "revex",
+          "path": "apps/blade-platform/workers/helper/wallet-worker/modelChangeStatus.handler.ts",
+          "line": 238,
+          "state": "DONE"
+        },
+        {
+          "name": "manual_override",
+          "title": "Manual activate (ops)",
+          "detail": "PATCH company-wallet/activate-wallet/:id sets ACTIVE without history.",
+          "kind": "api",
+          "channel": "PATCH /company-wallet/activate-wallet/:id",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/CompanyWallet/companyWallet.controller.ts",
+          "line": 305,
+          "state": "ACTIVE"
+        }
+      ],
+      "terminal": {
+        "success": [
+          "activated",
+          "deactivated",
+          "skipped: invalid / purged / stale / no_change / wallet_not_found"
+        ],
+        "failure": ["lock busy or status write did not reach desired status: nack and redeliver"]
+      },
+      "gotchas": [
+        "Purged sub-accounts are skipped with no wallet write.",
+        "Manual activate-wallet endpoints write no status history.",
+        "CDC producer for saas-wallet-service is outside this repo (unverified)."
+      ]
+    },
+    {
+      "id": "location_rebilling_fanout",
+      "name": "Location rebilling fan-out",
+      "group": "Setup & lifecycle",
+      "subject": "company -> location",
+      "apps": ["billing", "blade-platform"],
+      "trigger": "Bulk phone/email rebilling update (LOCATIONS_FETCH_AND_VALIDATION) or agency plan downgrade (COMPANY_SUBSCRIPTION_CHANGE_EVENT)",
+      "instanceKey": "trigger id (no natural id; companyId for downgrade)",
+      "summary": "The billing worker pages through a company's locations and publishes one LOCATION_UPDATE_REBILLING (and LOCATION_BAAS_CONFIG_UPDATE on downgrade) per location. Each leaf calls blade internal APIs to update Twilio/Mailgun rebilling.",
+      "steps": [
+        {
+          "name": "bulk_rebilling_requested",
+          "title": "Bulk rebilling requested",
+          "detail": "Phone/email product config update publishes LOCATIONS_FETCH_AND_VALIDATION.",
+          "kind": "api",
+          "channel": "revex-blade-billing-events / LOCATIONS_FETCH_AND_VALIDATION",
+          "repo": "revex",
+          "path": "apps/billing/src/services/proxyRebillingReselling.service.ts",
+          "line": 911,
+          "state": "REQUESTED"
+        },
+        {
+          "name": "company_plan_changed",
+          "title": "Agency plan change detected",
+          "detail": "Misc worker compares stripeActivePlan before/after on COMPANY model change.",
+          "kind": "pubsub-worker",
+          "channel": "revex-blade-miscellaneous-task-events",
+          "repo": "revex",
+          "path": "apps/blade-platform/workers/helper/walletMiscellaneousTaskWorker.helper.ts",
+          "line": 801,
+          "state": "PLAN_CHANGED"
+        },
+        {
+          "name": "downgrade_published",
+          "title": "Publish subscription change",
+          "detail": "Publishes COMPANY_SUBSCRIPTION_CHANGE_EVENT to billing; upgrades are ignored.",
+          "kind": "service",
+          "channel": "revex-blade-billing-events / COMPANY_SUBSCRIPTION_CHANGE_EVENT",
+          "repo": "revex",
+          "path": "apps/blade-platform/workers/helper/walletMiscellaneousTaskWorker.helper.ts",
+          "line": 915,
+          "state": "DOWNGRADE_QUEUED"
+        },
+        {
+          "name": "billing_worker_dispatch",
+          "title": "Billing worker dispatch",
+          "detail": "Serial worker (flowControl 1) switches on message type.",
+          "kind": "pubsub-worker",
+          "channel": "revex-blade-billing-events",
+          "repo": "revex",
+          "path": "apps/billing/workers/helper/revexBillingWorker.helper.ts",
+          "line": 41,
+          "state": "RECEIVED"
+        },
+        {
+          "name": "verify_locations_pages",
+          "title": "Verify locations page by page",
+          "detail": "Paginates 100 locations and publishes LOCATION_UPDATE_REBILLING per location.",
+          "kind": "pubsub-worker",
+          "channel": "LOCATION_UPDATE_REBILLING",
+          "repo": "revex",
+          "path": "apps/billing/src/services/baasConfig.service.ts",
+          "line": 1796,
+          "state": "FANNING_OUT"
+        },
+        {
+          "name": "subscription_change_processed",
+          "title": "Process downgrade per location",
+          "detail": "Paginates locations; publishes phone/email rebilling and LOCATION_BAAS_CONFIG_UPDATE per location.",
+          "kind": "pubsub-worker",
+          "channel": "LOCATION_UPDATE_REBILLING / LOCATION_BAAS_CONFIG_UPDATE",
+          "repo": "revex",
+          "path": "apps/billing/src/services/baasConfig.service.ts",
+          "line": 2149,
+          "state": "FANNING_OUT"
+        },
+        {
+          "name": "location_rebilling_applied",
+          "title": "Apply location rebilling",
+          "detail": "Leaf: calls bulkUpdateTwilioRebilling / bulkUpdateMailgunRebilling for one location.",
+          "kind": "pubsub-worker",
+          "channel": "LOCATION_UPDATE_REBILLING",
+          "repo": "revex",
+          "path": "apps/billing/src/services/baasConfig.service.ts",
+          "line": 1971,
+          "state": "APPLIED"
+        },
+        {
+          "name": "location_baas_config_updated",
+          "title": "Apply location BaaS config",
+          "detail": "Leaf: updates the location baasconfig on downgrade.",
+          "kind": "pubsub-worker",
+          "channel": "LOCATION_BAAS_CONFIG_UPDATE",
+          "repo": "revex",
+          "path": "apps/billing/src/services/baasConfig.service.ts",
+          "line": 2334,
+          "state": "APPLIED"
+        }
+      ],
+      "terminal": {
+        "success": [
+          "all location leaves applied",
+          "upgrade ignored",
+          "unsupported product skipped"
+        ],
+        "failure": [
+          "leaf catch returns undefined: nack and redeliver",
+          "parent throw: nack, pages re-published (duplicate children possible)"
+        ]
+      },
+      "gotchas": [
+        "Downgrade matcher compares stripeActivePlanBefore where After was intended (walletMiscellaneousTaskWorker.helper.ts ~857-903).",
+        "expectedChildren is unknown up front for all-locations runs; pagination is in-process.",
+        "flowControl 1 and 300s ack deadline: large agencies can redeliver while still running, with no lock."
+      ]
+    },
+    {
+      "id": "baas_config_update",
+      "name": "BaaS config update",
+      "group": "Setup & lifecycle",
+      "subject": "company / location",
+      "apps": ["billing", "saas"],
+      "trigger": "SaaS plan create/update, BaaS config API, SaaS enable, or company without global rebilling config",
+      "instanceKey": "companyId / locationId",
+      "summary": "Single-message billing worker handlers that create or bulk-update rebilling and BaaS config docs (rebillingconfigs, baasconfigs, baaslogs). Bulk variants loop in-process over locations.",
+      "steps": [
+        {
+          "name": "billing_worker_dispatch",
+          "title": "Billing worker dispatch",
+          "detail": "Switch on BAAS_CONFIG_* / BILL_CONFIG_CREATION / GLOBAL_CONFIG_CREATION / BILLING_* types.",
+          "kind": "pubsub-worker",
+          "channel": "revex-blade-billing-events",
+          "repo": "revex",
+          "path": "apps/billing/workers/helper/revexBillingWorker.helper.ts",
+          "line": 41,
+          "state": "RECEIVED"
+        },
+        {
+          "name": "global_config_requested",
+          "title": "Global config creation requested",
+          "detail": "Publishes GLOBAL_CONFIG_CREATION when the company has no global rebilling config.",
+          "kind": "service",
+          "channel": "GLOBAL_CONFIG_CREATION",
+          "repo": "revex",
+          "path": "apps/billing/src/services/proxyRebillingReselling.service.ts",
+          "line": 127,
+          "state": "REQUESTED"
+        },
+        {
+          "name": "global_config_created",
+          "title": "Create rebilling global config",
+          "detail": "Skipped for 97-plan agencies; 11000 counts as success.",
+          "kind": "pubsub-worker",
+          "channel": "GLOBAL_CONFIG_CREATION",
+          "repo": "revex",
+          "path": "apps/billing/src/services/baasConfig.service.ts",
+          "line": 2082,
+          "state": "CREATED"
+        },
+        {
+          "name": "bill_config_created",
+          "title": "Create location bill config",
+          "detail": "BILL_CONFIG_CREATION from SaaS setup/upgrade/downgrade copies global config.",
+          "kind": "pubsub-worker",
+          "channel": "BILL_CONFIG_CREATION",
+          "repo": "revex",
+          "path": "apps/billing/src/services/baasConfig.service.ts",
+          "line": 756,
+          "state": "CREATED"
+        },
+        {
+          "name": "baas_config_bulk_applied",
+          "title": "Bulk update all locations",
+          "detail": "BAAS_CONFIG_UPDATE_ALL_LOCATION pages locations (100) and bulk-updates configs.",
+          "kind": "pubsub-worker",
+          "channel": "BAAS_CONFIG_UPDATE_ALL_LOCATION",
+          "repo": "revex",
+          "path": "apps/billing/src/services/baasConfig.service.ts",
+          "line": 990,
+          "state": "APPLIED"
+        },
+        {
+          "name": "baas_config_given_locations",
+          "title": "Bulk update given locations",
+          "detail": "BAAS_CONFIG_UPDATE_GIVEN_LOCATIONS applies to payload.locations.",
+          "kind": "pubsub-worker",
+          "channel": "BAAS_CONFIG_UPDATE_GIVEN_LOCATIONS",
+          "repo": "revex",
+          "path": "apps/billing/src/services/baasConfig.service.ts",
+          "line": 1051,
+          "state": "APPLIED"
+        },
+        {
+          "name": "billing_config_updated",
+          "title": "Billing config update / change",
+          "detail": "BILLING_CONFIG_UPDATE and BILLING_CHANGE update rebilling or baas configs.",
+          "kind": "pubsub-worker",
+          "channel": "BILLING_CONFIG_UPDATE / BILLING_CHANGE",
+          "repo": "revex",
+          "path": "apps/billing/src/services/baasConfig.service.ts",
+          "line": 936,
+          "state": "APPLIED"
+        },
+        {
+          "name": "config_update_logged",
+          "title": "Write config update log",
+          "detail": "BAAS_CONFIG_UPDATE_EVENT writes baaslogs / audit.",
+          "kind": "pubsub-worker",
+          "channel": "BAAS_CONFIG_UPDATE_EVENT",
+          "repo": "revex",
+          "path": "apps/billing/src/services/baasConfig.service.ts",
+          "line": 872,
+          "state": "LOGGED"
+        }
+      ],
+      "terminal": {
+        "success": [
+          "config created/updated",
+          "skipped: 97-plan agency",
+          "skipped: duplicate (11000)"
+        ],
+        "failure": [
+          "throw: nack, full loop re-runs (bulk $set idempotent)",
+          "global config with no billing data returns false: deterministic nack retry storm"
+        ]
+      },
+      "gotchas": [
+        "createRebillingGlobalConfig returns false on missing billing data, so the worker nacks a deterministic failure repeatedly.",
+        "No per-location events exist in bulk updates; fan-out is invisible."
+      ]
+    },
+    {
+      "id": "wallet_recharge",
+      "name": "Wallet recharge (card: manual + auto)",
+      "group": "Recharge",
+      "subject": "company / location",
+      "apps": ["blade-platform", "stripe-consumer"],
+      "trigger": "User top-up (create-payment-intent) or wallet balance CDC below threshold (auto)",
+      "instanceKey": "paymentIntentId (pi_...); proposed rechargeAttemptId before PI exists",
+      "summary": "One card recharge attempt. Manual: client confirms a manual-capture PI, Blade captures on charge.succeeded and credits on payment_intent.succeeded. Auto: Blade confirms an off-session PI and credits on success or hands failures to the retry scheduler.",
+      "steps": [
+        {
+          "name": "manual_recharge_requested",
+          "title": "Manual top-up PI created (company)",
+          "detail": "Agency calls create-payment-intent; Blade creates a manual-capture PI on the agency Stripe customer.",
+          "kind": "api",
+          "channel": "POST /company-wallet/:companyId/create-payment-intent",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/CompanyWallet/companyWallet.service.ts",
+          "line": 3003,
+          "state": "PI_CREATED"
+        },
+        {
+          "name": "manual_recharge_requested_location",
+          "title": "Manual top-up PI created (location)",
+          "detail": "Location PI on the agency connected account, with Stripe Tax when required.",
+          "kind": "api",
+          "channel": "POST /location-wallet/:companyId/:locationId/create-payment-intent",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/LocationWallet/locationWallet.service.ts",
+          "line": 141,
+          "state": "PI_CREATED"
+        },
+        {
+          "name": "stripe_event_ingested",
+          "title": "Stripe webhook fanned out",
+          "detail": "stripe-consumer wraps the Stripe event and publishes it to the Blade recharge topic.",
+          "kind": "webhook",
+          "channel": "stripe-service-agency-event / stripe-service-event -> revex-blade-wallet-recharge-events",
+          "repo": "revex",
+          "path": "apps/stripe-consumer/src/consumer/stripe-consumer.service.ts",
+          "line": 16,
+          "state": "WEBHOOK_RECEIVED"
+        },
+        {
+          "name": "payment_authorized",
+          "title": "Authorization captured (manual)",
+          "detail": "charge.succeeded with captured=false; Blade captures the PI with an idempotency key.",
+          "kind": "pubsub-worker",
+          "channel": "revex-blade-wallet-recharge-events (charge.succeeded)",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/WalletRecharge/rechargeTransaction.service.ts",
+          "line": 362,
+          "state": "CAPTURED"
+        },
+        {
+          "name": "payment_succeeded_webhook",
+          "title": "payment_intent.succeeded handled",
+          "detail": "Agency/location webhook handler dedupes by chargeId and queues the credit txn.",
+          "kind": "pubsub-worker",
+          "channel": "revex-blade-wallet-recharge-events (payment_intent.succeeded)",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/WalletRecharge/rechargeTransaction.service.ts",
+          "line": 1565,
+          "state": "PAYMENT_SUCCEEDED"
+        },
+        {
+          "name": "auto_recharge_triggered",
+          "title": "Balance below threshold (auto)",
+          "detail": "Wallet CDC on COMPANY_WALLETS/LOCATION_WALLETS is typed as *_WALLET_BALANCE_CHANGE; handler checks threshold, gates, staleness and publishes INIT_*_AUTO_RECHARGE.",
+          "kind": "cdc/change-stream",
+          "channel": "revex-blade-wallet-recharge-events (COMPANY_WALLET_BALANCE_CHANGE / LOCATION_WALLET_BALANCE_CHANGE)",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/WalletRecharge/walletRecharge.service.ts",
+          "line": 772,
+          "state": "INIT_PUBLISHED"
+        },
+        {
+          "name": "auto_recharge_initiated",
+          "title": "Auto-recharge init (company)",
+          "detail": "Validates request flag and lock, resolves payer, confirms an off-session PI (location variant: initAutoRechargeForLocation at line 2257, incl. SaaS v2 onetime charge).",
+          "kind": "pubsub-worker",
+          "channel": "revex-blade-wallet-recharge-events (INIT_AGENCY_AUTO_RECHARGE / INIT_LOCATION_AUTO_RECHARGE)",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/WalletRecharge/walletRecharge.service.ts",
+          "line": 1187,
+          "state": "VALIDATED"
+        },
+        {
+          "name": "payment_intent_created",
+          "title": "Off-session PI confirmed",
+          "detail": "Iterates saved payment methods and returns on the first succeeded/processing PI; no idempotency key on create.",
+          "kind": "service",
+          "channel": "Stripe PaymentIntents API",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/WalletRecharge/stripe.helper.ts",
+          "line": 353,
+          "state": "PI_CONFIRMED"
+        },
+        {
+          "name": "credit_txn_queued",
+          "title": "Credit txn queued",
+          "detail": "Publishes CREATE_CREDIT_TXN_FOR_MANUAL_RECHARGE or CREATE_CREDIT_TXN_FOR_AUTO_RECHARGE.",
+          "kind": "service",
+          "channel": "revex-blade-wallet-recharge-events (CREATE_CREDIT_TXN_FOR_*_RECHARGE)",
+          "repo": "revex",
+          "path": "apps/blade-platform/common/services/pubsub.services.ts",
+          "line": 308,
+          "state": "CREDIT_QUEUED"
+        },
+        {
+          "name": "wallet_credited",
+          "title": "Wallet credited",
+          "detail": "Redlock, dedupe by chargeId, $inc currentBalance, insert COMPLETED txn, GL/ledger event (company), commit.",
+          "kind": "pubsub-worker",
+          "channel": "revex-blade-wallet-recharge-events (CREATE_CREDIT_TXN_FOR_*_RECHARGE)",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/WalletRecharge/rechargeTransaction.service.ts",
+          "line": 718,
+          "state": "COMPLETED"
+        },
+        {
+          "name": "post_recharge_success",
+          "title": "Post-credit cleanup",
+          "detail": "Clears request flags/gates, writes RETRY_SUCCEEDED resolution row; location re-checks threshold via recheckAutoRechargeNeeded (line 2338).",
+          "kind": "service",
+          "channel": "-",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/WalletRecharge/rechargeTransaction.service.ts",
+          "line": 2191,
+          "state": "COMPLETED"
+        },
+        {
+          "name": "payment_failed",
+          "title": "Auto-recharge failure handled",
+          "detail": "Classifies the Stripe error, calls retry scheduler, sets gate, publishes REVEX_BLADE_AUTO_RECHARGE_FAILURE and negative-balance email (location).",
+          "kind": "service",
+          "channel": "REVEX_BLADE_AUTO_RECHARGE_FAILURE custom event",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/WalletRecharge/walletRecharge.service.ts",
+          "line": 3884,
+          "state": "FAILED"
+        },
+        {
+          "name": "failure_logged",
+          "title": "Client-reported failure recorded",
+          "detail": "record-recharge-failure publishes RECHARGE_FAILURE_TRACKING; handler drops MANUAL_RECHARGE rows.",
+          "kind": "pubsub-worker",
+          "channel": "revex-blade-wallet-recharge-events (RECHARGE_FAILURE_TRACKING)",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/WalletRecharge/walletRecharge.service.ts",
+          "line": 708,
+          "state": "FAILED"
+        }
+      ],
+      "terminal": {
+        "success": [
+          "Txn COMPLETED with chargeId=pi_..., chargeType Stripe_Payment",
+          "Deduped: TXN already exists"
+        ],
+        "failure": [
+          "Card declined / 3DS failed (manual: client-side only)",
+          "PI processing then failed (no handler)",
+          "requires_capture on auto path (acked, funds stay authorized)",
+          "Skipped: wallet inactive / auto-recharge disabled / above threshold / gate active / in progress",
+          "WALLET_NOT_FOUND / STRIPE_CUSTOMER_NOT_SET (acked)"
+        ]
+      },
+      "gotchas": [
+        "Lock-contention check tests modifiedCount>0 on a $setOnInsert upsert, so it never fires (walletRecharge.service.ts:1224, :2294).",
+        "Manual card failures are dropped from rechargefailurelogs (handleRechargeFailureTracking skips MANUAL_RECHARGE, walletRecharge.service.ts:714).",
+        "createAndConfirmIntent has no idempotency key; a redelivered INIT_* after a crash can create a second PI."
+      ]
+    },
+    {
+      "id": "wallet_recharge_reselling_invoice",
+      "name": "Wallet recharge via reselling invoice",
+      "group": "Recharge",
+      "subject": "company",
+      "apps": ["blade-platform", "saas-service"],
+      "trigger": "Auto-recharge recovery batch (INIT_AGENCY_AUTO_RECHARGE_VIA_RESELLING_INVOICE) or POST /company-wallet/manual-recharge",
+      "instanceKey": "reselling subscriptionId (attrs: paymentIntentId, transactionId)",
+      "summary": "Invoice rail of wallet_recharge: Blade creates a one-time reselling-api invoice, waits for a sync or webhook COMPLETE, writes a PENDING credit txn, and saas-service settles it.",
+      "steps": [
+        {
+          "name": "recovery_scan_selected",
+          "title": "Recovery task scans wallets",
+          "detail": "Ops endpoint publishes REVEX_BLADE_AUTO_RECHARGE_RECOVERY_TASK; misc worker batches wallets and publishes INIT_AGENCY_AUTO_RECHARGE_VIA_RESELLING_INVOICE.",
+          "kind": "api",
+          "channel": "POST /company-wallet/trigger-auto-recharge-recovery",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/CompanyWallet/companyWallet.service.ts",
+          "line": 2054,
+          "state": "QUEUED"
+        },
+        {
+          "name": "auto_invoice_recharge_initiated",
+          "title": "Auto invoice recharge init (4a)",
+          "detail": "Validates requirement, acquires auto-wallet-recharge-{id} unique lock (7d, ghost-lock cleanup).",
+          "kind": "pubsub-worker",
+          "channel": "revex-blade-wallet-recharge-events (INIT_AGENCY_AUTO_RECHARGE_VIA_RESELLING_INVOICE)",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/WalletRecharge/walletRecharge.service.ts",
+          "line": 1501,
+          "state": "LOCKED"
+        },
+        {
+          "name": "manual_invoice_recharge_requested",
+          "title": "Manual invoice recharge (4b)",
+          "detail": "Mesh-only API validates wallet/company active and runs the invoice rail without a lock.",
+          "kind": "api",
+          "channel": "POST /company-wallet/manual-recharge",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/CompanyWallet/companyWallet.service.ts",
+          "line": 541,
+          "state": "VALIDATED"
+        },
+        {
+          "name": "reselling_invoice_created",
+          "title": "Reselling invoice created",
+          "detail": "Calls reselling-api to create a one-time wallet top-up subscription invoice.",
+          "kind": "service",
+          "channel": "reselling-api POST /subscription/company/{id}/{product}",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/WalletRecharge/walletRecharge.service.ts",
+          "line": 2165,
+          "state": "INVOICE_CREATED"
+        },
+        {
+          "name": "invoice_status_handled",
+          "title": "Invoice status branched",
+          "detail": "COMPLETE -> process; PENDING -> pending email; FAIL -> release lock and fail.",
+          "kind": "service",
+          "channel": "PENDING_RECHARGE_EVENT (notifications)",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/WalletRecharge/walletRecharge.service.ts",
+          "line": 1917,
+          "state": "INVOICE_PENDING"
+        },
+        {
+          "name": "invoice_status_webhook_received",
+          "title": "Reselling status webhook",
+          "detail": "reselling-api posts status; Blade republishes COMPANY_SUBSCRIPTION_STATUS_CHANGE.",
+          "kind": "webhook",
+          "channel": "POST /company-wallet/reselling/webhook/status",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/CompanyWallet/companyWallet.controller.ts",
+          "line": 534,
+          "state": "WEBHOOK_RECEIVED"
+        },
+        {
+          "name": "status_change_processed",
+          "title": "Status change processed",
+          "detail": "Dedupes per status, then completes or fails the invoice recharge.",
+          "kind": "pubsub-worker",
+          "channel": "revex-blade-wallet-recharge-events (COMPANY_SUBSCRIPTION_STATUS_CHANGE)",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/WalletRecharge/walletRecharge.service.ts",
+          "line": 4615,
+          "state": "INVOICE_COMPLETE"
+        },
+        {
+          "name": "payment_intent_resolved",
+          "title": "PI resolved, pending txn queued",
+          "detail": "Reads PI from Stripe invoice and publishes CREATE_CREDIT_TXN_FOR_AUTO_RECHARGE with usePendingTransaction.",
+          "kind": "service",
+          "channel": "revex-blade-wallet-recharge-events (CREATE_CREDIT_TXN_FOR_AUTO_RECHARGE)",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/WalletRecharge/walletRecharge.service.ts",
+          "line": 2212,
+          "state": "CREDIT_QUEUED"
+        },
+        {
+          "name": "pending_txn_created",
+          "title": "PENDING credit txn written",
+          "detail": "Inserts PENDING txn (settlementTime EPOCH) and GL event; lock is kept.",
+          "kind": "pubsub-worker",
+          "channel": "revex-blade-wallet-recharge-events (CREATE_CREDIT_TXN_FOR_AUTO_RECHARGE)",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/WalletRecharge/rechargeTransaction.service.ts",
+          "line": 1146,
+          "state": "PENDING"
+        },
+        {
+          "name": "wallet_settled",
+          "title": "saas settles pending txn",
+          "detail": "saas post-save hook + settlement worker move txn to COMPLETED (see saas_pending_recharge_settlement).",
+          "kind": "pubsub-worker",
+          "channel": "saas-wallet-service (PENDING_TRANSACTION_EVENT)",
+          "repo": "saas",
+          "path": "src/handlers/wallet/wallet.services.ts",
+          "line": 219,
+          "state": "COMPLETED"
+        },
+        {
+          "name": "settlement_complete_ack",
+          "title": "Settlement-complete lock release",
+          "detail": "Blade deletes auto-wallet-recharge-{id} instance for COMPANY auto rows only.",
+          "kind": "pubsub-worker",
+          "channel": "revex-blade-wallet-recharge-events (RECHARGE_SETTLEMENT_COMPLETE)",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/WalletRecharge/rechargeTransaction.service.ts",
+          "line": 2412,
+          "state": "COMPLETED"
+        }
+      ],
+      "terminal": {
+        "success": [
+          "Txn COMPLETED with chargeId=pi (or subscriptionId fallback)",
+          "API statusCode COMPLETE"
+        ],
+        "failure": [
+          "RESELLING_SUBSCRIPTION_FAILED (sync or webhook FAIL; no decline detail, no retry)",
+          "INVOICE_CREATION_FAILED",
+          "TRANSACTION_CREATION_FAILED",
+          "AUTO_RECHARGE_NOT_NEEDED / ALREADY_IN_PROGRESS (skips)"
+        ]
+      },
+      "gotchas": [
+        "saas shouldUseNewFlow() is hard-coded false, so 4a is only reached from the recovery task.",
+        "Pending invoice txns always use GL_AGENCY_AUTO_RECHARGE_CODE, even for manual invoices.",
+        "4b never acquires the manual-wallet-recharge lock, so two concurrent manual invoices are possible."
+      ]
+    },
+    {
+      "id": "wallet_auto_recharge_cycle",
+      "name": "Auto-recharge retry cycle",
+      "group": "Recharge",
+      "subject": "company / location",
+      "apps": ["blade-platform", "saas-service"],
+      "trigger": "Failed auto-recharge attempt classified as retryable",
+      "instanceKey": "retry correlationId (rechargefailurelogs.correlationId)",
+      "summary": "Parent of failed wallet_recharge attempts. Cloud Tasks retry at 24h/48h/96h until a retry succeeds, the user tops up manually, or retries run out.",
+      "steps": [
+        {
+          "name": "cycle_opened",
+          "title": "Failure classified, retry scheduled",
+          "detail": "Scheduler opens a cycle id, writes a rechargefailurelogs row and creates a Cloud Task for the next rung.",
+          "kind": "service",
+          "channel": "Cloud Tasks queue",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/WalletRecharge/retry/retry.scheduler.ts",
+          "line": 235,
+          "state": "PENDING"
+        },
+        {
+          "name": "gate_set",
+          "title": "Balance-change gate set",
+          "detail": "Suppresses CDC re-triggers until the Cloud Task fires (rung delay + 1h).",
+          "kind": "service",
+          "channel": "Redis BalanceChangeGateCache",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/WalletRecharge/walletRecharge.service.ts",
+          "line": 4064,
+          "state": "PENDING"
+        },
+        {
+          "name": "retry_task_fired_company",
+          "title": "Cloud Task retry (company)",
+          "detail": "CloudTaskGuard route re-runs initAutoRechargeForAgency with retryTaskContext.",
+          "kind": "cloud-task",
+          "channel": "POST /company-wallet/:companyId/retry-payment-secure",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/CompanyWallet/companyWallet.controller.ts",
+          "line": 627,
+          "state": "RETRYING"
+        },
+        {
+          "name": "retry_task_fired_location",
+          "title": "Cloud Task retry (location)",
+          "detail": "Same for location wallets.",
+          "kind": "cloud-task",
+          "channel": "POST /location-wallet/:companyId/:locationId/retry-payment-secure",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/LocationWallet/locationWallet.controller.ts",
+          "line": 276,
+          "state": "RETRYING"
+        },
+        {
+          "name": "retry_attempted",
+          "title": "Retry handler runs attempt",
+          "detail": "Maps init result to retried / skipped-in-progress / skipped-not-needed / noop-wallet-missing / init-failed; rethrows on failure so Cloud Tasks retries.",
+          "kind": "service",
+          "channel": "-",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/WalletRecharge/retry/retry.handler.ts",
+          "line": 81,
+          "state": "RETRYING"
+        },
+        {
+          "name": "retry_succeeded",
+          "title": "Retry succeeded",
+          "detail": "Credit path writes RETRY_SUCCEEDED resolution row in postRechargeTxnSuccess.",
+          "kind": "service",
+          "channel": "-",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/WalletRecharge/rechargeTransaction.service.ts",
+          "line": 2191,
+          "state": "RETRY_SUCCEEDED"
+        },
+        {
+          "name": "recovered_manual_cdc",
+          "title": "Recovered by balance rise",
+          "detail": "Wallet CDC sees balance back at threshold while a cycle is open; cancels task and writes RECOVERED_MANUAL.",
+          "kind": "cdc/change-stream",
+          "channel": "revex-blade-wallet-recharge-events (*_WALLET_BALANCE_CHANGE)",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/WalletRecharge/walletRecharge.service.ts",
+          "line": 567,
+          "state": "RECOVERED_MANUAL"
+        },
+        {
+          "name": "recovered_manual_saas",
+          "title": "Recovered by saas top-up",
+          "detail": "saas publishes RECHARGE_FAILURE_RESOLVE after a manual top-up; Blade cancels the task and clears caches.",
+          "kind": "pubsub-worker",
+          "channel": "revex-blade-wallet-recharge-events (RECHARGE_FAILURE_RESOLVE)",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/WalletRecharge/walletRecharge.service.ts",
+          "line": 620,
+          "state": "RECOVERED_MANUAL"
+        },
+        {
+          "name": "negative_balance_notification_sent",
+          "title": "Negative-balance email (location)",
+          "detail": "Published when a location auto-recharge fails and balance < 0.",
+          "kind": "service",
+          "channel": "POST_PROCESSING_SUB_ACCOUNT_NEGATIVE_BALANCE",
+          "repo": "revex",
+          "path": "apps/blade-platform/common/services/pubsub.services.ts",
+          "line": 362,
+          "state": "PENDING"
+        },
+        {
+          "name": "failure_notified",
+          "title": "Failure analytics + email",
+          "detail": "REVEX_BLADE_AUTO_RECHARGE_FAILURE consumed by notifications worker (email) and analytics worker (Pendo).",
+          "kind": "pubsub-worker",
+          "channel": "REVEX_BLADE_AUTO_RECHARGE_FAILURE",
+          "repo": "revex",
+          "path": "apps/blade-platform/notifications-worker/helper/revex-blade-notifications-worker.helper.ts",
+          "line": 80,
+          "state": "PENDING"
+        }
+      ],
+      "terminal": {
+        "success": ["RETRY_SUCCEEDED", "RECOVERED_MANUAL"],
+        "failure": [
+          "RETRIES_EXHAUSTED (24h suppression afterwards)",
+          "TERMINAL (stolen/lost card, fraudulent)",
+          "REQUIRES_ACTION (PENDING row, no task; waits for manual top-up)",
+          "task_failed (Cloud Task create failed)"
+        ]
+      },
+      "gotchas": [
+        "REQUIRES_ACTION leaves the cycle open with no scheduled task until a manual top-up or TTL expiry.",
+        "COMPANY_/LOCATION_WALLET_RECHARGE_MAX_RETRIES constants are dead; the ladder length (3) decides attempts.",
+        "Retry handler rethrows on success:false, so the same Cloud Task is retried by Cloud Tasks, not by the ladder."
+      ]
+    },
+    {
+      "id": "wallet_recharge_ach",
+      "name": "ACH wallet recharge",
+      "group": "Recharge",
+      "subject": "company",
+      "apps": ["blade-platform", "stripe-consumer", "saas-service"],
+      "trigger": "Agency starts ACH top-up (US, USD only)",
+      "instanceKey": "paymentIntentId",
+      "summary": "Agency debits a US bank account via a us_bank_account PI. Blade routes the multi-day webhook outcome; saas-service writes and settles the PENDING credit and emits ACH_PAYMENT_SUCCESS for the email.",
+      "steps": [
+        {
+          "name": "ach_recharge_requested",
+          "title": "ACH PI requested",
+          "detail": "Checks US agency, USD and wallet; reserves ach-pi-in-flight-{companyId} (409 if one is in flight).",
+          "kind": "api",
+          "channel": "POST /company-wallet/:companyId/create-ach-payment-intent",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/CompanyWallet/companyWallet.service.ts",
+          "line": 3182,
+          "state": "RESERVED"
+        },
+        {
+          "name": "ach_payment_intent_created",
+          "title": "ACH PaymentIntent created",
+          "detail": "Creates automatic-capture us_bank_account PI and stamps the reservation.",
+          "kind": "service",
+          "channel": "Stripe PaymentIntents API",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/WalletRecharge/stripe.helper.ts",
+          "line": 1152,
+          "state": "PI_CREATED"
+        },
+        {
+          "name": "ach_webhook_routed",
+          "title": "ACH webhook routed",
+          "detail": "handleAgencyWebhook detects paymentMethodType us_bank_account and calls handleAchManualRechargeWebhook.",
+          "kind": "pubsub-worker",
+          "channel": "revex-blade-wallet-recharge-events (stripe-service-agency-event)",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/WalletRecharge/rechargeTransaction.service.ts",
+          "line": 2655,
+          "state": "WEBHOOK_RECEIVED"
+        },
+        {
+          "name": "ach_settlement_queued",
+          "title": "Settlement queued to saas",
+          "detail": "On payment_intent.succeeded, clears the reservation and publishes ach-manual-recharge-settlement.",
+          "kind": "service",
+          "channel": "saas-recharge-service (ACH_MANUAL_RECHARGE_SETTLEMENT)",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/WalletRecharge/rechargeTransaction.service.ts",
+          "line": 2813,
+          "state": "SETTLEMENT_QUEUED"
+        },
+        {
+          "name": "ach_pending_txn_created",
+          "title": "saas writes PENDING ACH txn",
+          "detail": "Dedupes by PI, locks wallet, inserts PENDING txn with meta.paymentMethod=ACH.",
+          "kind": "pubsub-worker",
+          "channel": "saas-recharge-service (ACH_MANUAL_RECHARGE_SETTLEMENT)",
+          "repo": "saas",
+          "path": "src/handlers/companyWallet/index.ts",
+          "line": 1000,
+          "state": "PENDING"
+        },
+        {
+          "name": "ach_wallet_credited",
+          "title": "saas manual settler credits wallet",
+          "detail": "Post-save hook publishes MANUAL_RECHARGE; settler completes the txn and publishes ACH_PAYMENT_SUCCESS.",
+          "kind": "pubsub-worker",
+          "channel": "saas-recharge-service (MANUAL_RECHARGE)",
+          "repo": "saas",
+          "path": "src/handlers/companyWallet/index.ts",
+          "line": 838,
+          "state": "COMPLETED"
+        },
+        {
+          "name": "ach_success_email_sent",
+          "title": "ACH success email",
+          "detail": "Blade handles ACH_PAYMENT_SUCCESS and sends the success email.",
+          "kind": "pubsub-worker",
+          "channel": "revex-blade-wallet-recharge-events (ACH_PAYMENT_SUCCESS)",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/WalletRecharge/rechargeTransaction.service.ts",
+          "line": 2497,
+          "state": "COMPLETED"
+        },
+        {
+          "name": "ach_debit_failed",
+          "title": "ACH failed / canceled",
+          "detail": "payment_intent.payment_failed or .canceled clears the reservation and publishes ACH_PAYMENT_FAILURE (orderingKey=companyId).",
+          "kind": "service",
+          "channel": "revex-blade-wallet-recharge-events (ACH_PAYMENT_FAILURE)",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/WalletRecharge/rechargeTransaction.service.ts",
+          "line": 2753,
+          "state": "FAILED"
+        },
+        {
+          "name": "ach_failure_email_sent",
+          "title": "ACH failure email",
+          "detail": "Classifies the return code and emails the agency.",
+          "kind": "pubsub-worker",
+          "channel": "revex-blade-wallet-recharge-events (ACH_PAYMENT_FAILURE)",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/WalletRecharge/rechargeTransaction.service.ts",
+          "line": 2580,
+          "state": "FAILED"
+        },
+        {
+          "name": "ach_bonus_credited",
+          "title": "ACH bonus credit (disabled)",
+          "detail": "Consumer still live but the publish is commented out.",
+          "kind": "pubsub-worker",
+          "channel": "revex-blade-wallet-recharge-events (ACH_BONUS_CREDIT)",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/WalletRecharge/rechargeTransaction.service.ts",
+          "line": 1402,
+          "state": "COMPLETED"
+        }
+      ],
+      "terminal": {
+        "success": [
+          "Txn COMPLETED with chargeId=pi and meta.paymentMethod ACH; ACH_PAYMENT_SUCCESS sent"
+        ],
+        "failure": [
+          "payment_intent.payment_failed (bank return)",
+          "payment_intent.canceled",
+          "409 another ACH in progress",
+          "400/404 non-US / non-USD / wallet missing (failure row written)"
+        ]
+      },
+      "gotchas": [
+        "payment_intent.processing is not subscribed, so the processing branch is dead and the multi-day wait is invisible.",
+        "ACH failures write no rechargefailurelogs row; ACH success never emits Blade PAYMENT_SUCCESS_EVENT.",
+        "create-ach-payment-intent has no route-level guard (only global BladeAuthGuard); confirm :companyId tenant binding."
+      ]
+    },
+    {
+      "id": "saas_legacy_company_auto_recharge",
+      "name": "Legacy saas company auto-recharge",
+      "group": "Recharge",
+      "subject": "company",
+      "apps": ["saas-service", "blade-platform"],
+      "trigger": "saas watcher sees CompanyWallet currentBalance update (change stream or WATCHER_CHANGE_EVENT)",
+      "instanceKey": "companyId + Redis autoRechargeRequest flag",
+      "summary": "Older saas-service producer for company auto-recharge. In staging/production it forwards to Blade as INIT_AGENCY_AUTO_RECHARGE; elsewhere it charges Stripe and writes the credit itself.",
+      "steps": [
+        {
+          "name": "wallet_change_watched",
+          "title": "CompanyWallet change stream",
+          "detail": "Mongo change stream on CompanyWallet; currentBalance updates call the auto-recharge check.",
+          "kind": "cdc/change-stream",
+          "channel": "CompanyWallet.watch()",
+          "repo": "saas",
+          "path": "src/watcher/updateWallet.ts",
+          "line": 8,
+          "state": "DETECTED"
+        },
+        {
+          "name": "watcher_event_handled",
+          "title": "WATCHER_CHANGE_EVENT handled",
+          "detail": "Pub/Sub variant: CompanyWalletWatchHandler.handleUpdate checks auto-recharge for ACTIVE wallets.",
+          "kind": "pubsub-worker",
+          "channel": "saas-recharge-service (WATCHER_CHANGE_EVENT)",
+          "repo": "saas",
+          "path": "src/watcher/handlers/companyWallet.ts",
+          "line": 14,
+          "state": "DETECTED"
+        },
+        {
+          "name": "auto_recharge_check",
+          "title": "Threshold check",
+          "detail": "Skips disableAutoRecharge wallets, then calls addAutoRechargeRequestForWallet.",
+          "kind": "service",
+          "channel": "-",
+          "repo": "saas",
+          "path": "src/watcher/helper/companyWallet.ts",
+          "line": 35,
+          "state": "DETECTED"
+        },
+        {
+          "name": "request_flag_set",
+          "title": "Redis request flag set",
+          "detail": "Sets autoRechargeRequest:{entityId} with expiry; LOCATION returns early (handled by Blade CDC).",
+          "kind": "service",
+          "channel": "Redis autoRechargeRequest",
+          "repo": "saas",
+          "path": "src/handlers/locationWallet/walletUtils.ts",
+          "line": 184,
+          "state": "FLAGGED"
+        },
+        {
+          "name": "company_recharge_processed",
+          "title": "Company auto-recharge processed",
+          "detail": "Checks restricted/inactive company, wallet lock, threshold; computes amount.",
+          "kind": "service",
+          "channel": "-",
+          "repo": "saas",
+          "path": "src/handlers/companyWallet/index.ts",
+          "line": 1202,
+          "state": "VALIDATED"
+        },
+        {
+          "name": "forwarded_to_blade",
+          "title": "Forward to Blade (staging/prod)",
+          "detail": "Publishes INIT_AGENCY_AUTO_RECHARGE to the Blade recharge topic and aborts the local txn.",
+          "kind": "service",
+          "channel": "revex-blade-wallet-recharge-events (INIT_AGENCY_AUTO_RECHARGE)",
+          "repo": "saas",
+          "path": "src/handlers/companyWallet/index.ts",
+          "line": 1339,
+          "state": "FORWARDED"
+        },
+        {
+          "name": "legacy_stripe_charge",
+          "title": "Legacy Stripe charge (non-prod)",
+          "detail": "performAutoRecharge charges saved cards and inserts the credit txn locally.",
+          "kind": "service",
+          "channel": "Stripe",
+          "repo": "saas",
+          "path": "src/handlers/companyWallet/index.ts",
+          "line": 1390,
+          "state": "COMPLETED"
+        },
+        {
+          "name": "fallback_request_queued",
+          "title": "Fallback AUTO_RECHARGE_REQUEST",
+          "detail": "When processing fails, publishes AUTO_RECHARGE_REQUEST; the recharge worker re-runs it (LOCATION redirected to Blade).",
+          "kind": "pubsub-worker",
+          "channel": "saas-recharge-service (AUTO_RECHARGE_REQUEST)",
+          "repo": "saas",
+          "path": "src/recharge_worker.ts",
+          "line": 39,
+          "state": "QUEUED"
+        },
+        {
+          "name": "legacy_failure_tracked",
+          "title": "Failure tracked + retry",
+          "detail": "Publishes RECHARGE_FAILURE_TRACKING to Blade and schedules retryWalletPaymentAfterTimeout.",
+          "kind": "service",
+          "channel": "revex-blade-wallet-recharge-events (RECHARGE_FAILURE_TRACKING)",
+          "repo": "saas",
+          "path": "src/handlers/companyWallet/index.ts",
+          "line": 1509,
+          "state": "FAILED"
+        }
+      ],
+      "terminal": {
+        "success": ["Forwarded to Blade (prod path)", "Legacy credit txn created (non-prod)"],
+        "failure": [
+          "Restricted / inactive company skipped",
+          "Stripe failure tracked and retry scheduled",
+          "Messages older than 160h dead-lettered to saas-service-dead-letter"
+        ]
+      },
+      "gotchas": [
+        "Second company auto-recharge producer next to the Blade CDC path, with different Redis dedupe keys (autoRechargeRequest vs bladeAutoRechargeRequest): double INIT is possible.",
+        "shouldUseNewFlow() is hard-coded false (walletUtils.ts:20), so the reselling-invoice branch is never taken."
+      ]
+    },
+    {
+      "id": "saas_pending_recharge_settlement",
+      "name": "Pending recharge settlement (saas)",
+      "group": "Recharge",
+      "subject": "company / location",
+      "apps": ["saas-service", "blade-platform"],
+      "trigger": "PENDING CREDIT CompanyWalletTransaction saved (invoice rail, ACH)",
+      "instanceKey": "wallet transaction _id",
+      "summary": "saas-service turns PENDING credit txns into COMPLETED balance and tells Blade to release the invoice-rail lock.",
+      "steps": [
+        {
+          "name": "pending_txn_saved",
+          "title": "Post-save hook fires",
+          "detail": "CREDIT+PENDING txn clears auto-recharge flags, publishes MANUAL_RECHARGE and a settlement event.",
+          "kind": "service",
+          "channel": "saas-recharge-service (MANUAL_RECHARGE)",
+          "repo": "saas",
+          "path": "src/models/CompanyWalletTransaction.ts",
+          "line": 86,
+          "state": "PENDING"
+        },
+        {
+          "name": "manual_settler_ran",
+          "title": "Manual recharge settler",
+          "detail": "processManualRechargeForCompanyWallet settles the txn and publishes ACH_PAYMENT_SUCCESS for ACH rows.",
+          "kind": "pubsub-worker",
+          "channel": "saas-recharge-service (MANUAL_RECHARGE)",
+          "repo": "saas",
+          "path": "src/handlers/companyWallet/index.ts",
+          "line": 838,
+          "state": "SETTLING"
+        },
+        {
+          "name": "settlement_event_published",
+          "title": "Settlement event published",
+          "detail": "createTransactionSettlementTask publishes PENDING_TRANSACTION_EVENT to the saas wallet worker.",
+          "kind": "service",
+          "channel": "saas-wallet-service (PENDING_TRANSACTION_EVENT)",
+          "repo": "saas",
+          "path": "src/handlers/wallet/wallet.services.ts",
+          "line": 473,
+          "state": "SETTLING"
+        },
+        {
+          "name": "settlement_worker_ran",
+          "title": "Blade wallet worker settles batch",
+          "detail": "In production the saas-wallet-service subscription is consumed by Blade's revex-blade-wallet worker, which settles the pending txns under a wallet lock (saas-service wallet_worker.ts has no deployment).",
+          "kind": "pubsub-worker",
+          "channel": "sub saas-wallet-service-subscription (PENDING_TRANSACTION_EVENT)",
+          "repo": "revex",
+          "path": "apps/blade-platform/workers/helper/wallet-worker/pendingSettlement.processor.ts",
+          "line": 123,
+          "state": "SETTLING"
+        },
+        {
+          "name": "settlement_api",
+          "title": "Settlement via HTTP task",
+          "detail": "Cloud-task / internal endpoint variant of the same settlement.",
+          "kind": "cloud-task",
+          "channel": "POST /saas_wallet_service/company-wallet/:companyId/process-pending-transactions",
+          "repo": "saas",
+          "path": "src/handlers/companyWallet/index.ts",
+          "line": 1135,
+          "state": "SETTLING"
+        },
+        {
+          "name": "pending_txns_completed",
+          "title": "Pending txns completed",
+          "detail": "Locks wallet, applies balances, marks txns COMPLETED (ACH txns skipped here).",
+          "kind": "service",
+          "channel": "-",
+          "repo": "saas",
+          "path": "src/handlers/wallet/wallet.services.ts",
+          "line": 219,
+          "state": "COMPLETED"
+        },
+        {
+          "name": "post_settlement_analytics",
+          "title": "Recharge analytics + settlement complete",
+          "detail": "For auto-recharge Stripe txns, emits postRechargeSuccess and RECHARGE_SETTLEMENT_COMPLETE.",
+          "kind": "service",
+          "channel": "revex-blade-wallet-recharge-events (RECHARGE_SETTLEMENT_COMPLETE)",
+          "repo": "saas",
+          "path": "src/handlers/wallet/wallet.services.ts",
+          "line": 1058,
+          "state": "COMPLETED"
+        },
+        {
+          "name": "settlement_complete_ack",
+          "title": "Blade releases invoice lock",
+          "detail": "Deletes auto-wallet-recharge-{id} for COMPANY auto rows; others skipped.",
+          "kind": "pubsub-worker",
+          "channel": "revex-blade-wallet-recharge-events (RECHARGE_SETTLEMENT_COMPLETE)",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/WalletRecharge/rechargeTransaction.service.ts",
+          "line": 2412,
+          "state": "COMPLETED"
+        }
+      ],
+      "terminal": {
+        "success": ["Txn state COMPLETED, balance updated", "Invoice-rail lock released"],
+        "failure": [
+          "Settlement failure publishes RECHARGE_FAILURE_TRACKING (MANUAL_RECHARGE), which Blade drops",
+          "Wallet lock busy: nack and redeliver"
+        ]
+      },
+      "gotchas": [
+        "RECHARGE_SETTLEMENT_COMPLETE carries only transactionId, not subscriptionId or PI id; join via txn chargeId.",
+        "Bulk settler and watcher skip ACH txns; only the manual settler credits ACH."
+      ]
+    },
+    {
+      "id": "wallet_charge",
+      "name": "Wallet charge",
+      "group": "Charge & usage",
+      "subject": "company / location",
+      "apps": ["billing", "blade-platform"],
+      "trigger": "Producer (lc-phone, AI, gatekeeper, ...) calls the Billing bill API with an eventId",
+      "instanceKey": "Billing eventId (chargeV5.eventId); charge _id and wallet transactionId carried as attrs",
+      "summary": "Bill API dedupes, prices and funds-checks a usage event, then publishes it; the blade charge worker writes chargeV5 plus PENDING wallet debit txns, which the wallet worker settles per leg (company / location).",
+      "steps": [
+        {
+          "name": "bill_received",
+          "title": "Bill API receives charge",
+          "detail": "v1 single/batch bill request enters the billing controller (v2 route is gatekeeper-only).",
+          "kind": "api",
+          "channel": "POST billing-api/bill | POST billing-api/v2/bill",
+          "repo": "revex",
+          "path": "apps/billing/src/controllers/billing.controller.ts",
+          "line": 48,
+          "state": "RECEIVED"
+        },
+        {
+          "name": "bill_inactivity_checked",
+          "title": "Agency/location activity checked",
+          "detail": "v1/batch rejects inactive agency or location with 422 FUND_CHECK_FAILED; v2 skips this.",
+          "kind": "service",
+          "channel": "",
+          "repo": "revex",
+          "path": "apps/billing/src/services/billing.service.ts",
+          "line": 375,
+          "state": "VALIDATED"
+        },
+        {
+          "name": "bill_dedupe_checked",
+          "title": "Duplicate eventId check",
+          "detail": "chargeV5 lookup by eventId; existing charge returns 422 ALREADY_PROCESSED.",
+          "kind": "service",
+          "channel": "",
+          "repo": "revex",
+          "path": "apps/billing/src/controllers/billing.controller.ts",
+          "line": 228,
+          "state": "VALIDATED"
+        },
+        {
+          "name": "bill_config_resolved",
+          "title": "Product and BaaS config resolved",
+          "detail": "Loads product config and company/location rebilling config, checks opt-in (422 CONFIG_NOT_FOUND / PRODUCT_OPTIN_DISABLED).",
+          "kind": "service",
+          "channel": "",
+          "repo": "revex",
+          "path": "apps/billing/src/services/billing.service.ts",
+          "line": 65,
+          "state": "PRICED"
+        },
+        {
+          "name": "bill_price_computed",
+          "title": "Price and legs computed",
+          "detail": "Applies company then location markup/discount, fix-price or free-tier waiver; sets companyCharge/locationCharge.billing.",
+          "kind": "service",
+          "channel": "",
+          "repo": "revex",
+          "path": "apps/billing/src/services/billing.service.ts",
+          "line": 420,
+          "state": "PRICED"
+        },
+        {
+          "name": "bill_funds_checked",
+          "title": "Funds checked per billed leg",
+          "detail": "When price>0 and fundCheck!=false, checks each enabled wallet; domain purchases may top up via ensure-balance.",
+          "kind": "service",
+          "channel": "",
+          "repo": "revex",
+          "path": "apps/billing/src/services/billing.service.ts",
+          "line": 686,
+          "state": "FUNDS_OK"
+        },
+        {
+          "name": "charge_published",
+          "title": "Charge published to Pub/Sub",
+          "detail": "BAAS_CHARGE_CREATION message published; caller gets 200 'Charge event published successfully'.",
+          "kind": "service",
+          "channel": "topic revex-blade-billing-charge-events",
+          "repo": "revex",
+          "path": "apps/billing/src/controllers/billing.controller.ts",
+          "line": 283,
+          "state": "PUBLISHED"
+        },
+        {
+          "name": "charge_created",
+          "title": "Charge worker writes chargeV5 + wallet txns",
+          "detail": "Mongo transaction inserts chargeV5 and PENDING DEBIT wallet txn per billed leg; dedupes on eventId / 11000.",
+          "kind": "pubsub-worker",
+          "channel": "sub revex-blade-billing-charge-events-sub",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/Charge/chargeCreation.service.ts",
+          "line": 374,
+          "state": "PENDING"
+        },
+        {
+          "name": "gl_transfer_published",
+          "title": "GL transfer published to ledger",
+          "detail": "After commit, company-only charges with a glCode publish a wallet-ledger-event (see wallet_ledger_posting).",
+          "kind": "service",
+          "channel": "topic revex-blade-wallet-ledger-events",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/Charge/chargeCreation.service.ts",
+          "line": 483,
+          "state": "PENDING"
+        },
+        {
+          "name": "wallet_txn_settled",
+          "title": "Pending txn settled (per leg)",
+          "detail": "Txn-insert CDC or PENDING_TRANSACTION_EVENT runs settlement under a wallet lock: balance/credits updated, txn COMPLETED.",
+          "kind": "cdc/change-stream",
+          "channel": "global CDC COMPANY/LOCATION_WALLET_TRANSACTION; pending-transaction-event on saas-wallet-service",
+          "repo": "revex",
+          "path": "apps/blade-platform/workers/helper/wallet-worker/pendingSettlement.processor.ts",
+          "line": 123,
+          "state": "COMPLETED"
+        },
+        {
+          "name": "settlement_cron_sweep",
+          "title": "Daily settlement sweep",
+          "detail": "Cron dispatches PENDING_TRANSACTION_EVENT for every company (01:30) and location (02:30) wallet with pending txns.",
+          "kind": "cron",
+          "channel": "POST blade-platform/transactions/company|location/dispatch-process-pending-transactions",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/transaction/transaction.service.ts",
+          "line": 129,
+          "state": "COMPLETED"
+        },
+        {
+          "name": "auto_recharge_triggered",
+          "title": "Post-settlement auto-recharge / analytics",
+          "detail": "Company settlement hook may publish INIT_AGENCY_AUTO_RECHARGE; txn CDC update emits TRANSACTION_SETTLEMENT_EVENT to analytics.",
+          "kind": "service",
+          "channel": "topic for recharge worker; analytics worker",
+          "repo": "revex",
+          "path": "apps/blade-platform/workers/helper/wallet-worker/pendingSettlementAutoRecharge.hook.ts",
+          "line": 128,
+          "state": "COMPLETED"
+        }
+      ],
+      "terminal": {
+        "success": [
+          "Wallet txn(s) COMPLETED with walletBalance set (may go negative by design)",
+          "Free-tier location leg booked at $0"
+        ],
+        "failure": [
+          "422 ALREADY_PROCESSED (duplicate eventId)",
+          "422 FUND_CHECK_FAILED / CONFIG_NOT_FOUND / PRODUCT_OPTIN_DISABLED / INSUFFICIENT_FUNDS_DOMAIN_PURCHASE",
+          "500 UNKNOWN_ERROR (publish failed, nothing persisted)",
+          "Charge worker nack -> redelivery / DL worker",
+          "Txn stuck PENDING (missing location wallet)"
+        ]
+      },
+      "gotchas": [
+        "Location txns whose wallet is missing are acked and stay PENDING forever (pendingSettlement.processor.ts:152).",
+        "chargeV5 dedupe is check-then-publish in the controller; the worker relies on Mongo 11000 but no unique index on eventId was found in the schema.",
+        "Settlement burst gate only lets count%100===1 through per 1s window (walletPendingTransactionProcessingGate.service.ts:21); the daily cron is the guaranteed catch-up."
+      ]
+    },
+    {
+      "id": "saas_has_funds_check",
+      "name": "Legacy has-funds check (saas-service)",
+      "group": "Charge & usage",
+      "subject": "company / location",
+      "apps": ["saas-service"],
+      "trigger": "Producer pre-check before using a product (e.g. lc-phone twilioHelper)",
+      "instanceKey": "companyId or locationId (+ optional eventId/product query params, logged only)",
+      "summary": "saas-service answers hasFunds from a 10-minute Redis cache or the wallet doc; the saas Mongo watcher refreshes the cache on wallet change. Producers decide; nothing is recorded in wallet apps.",
+      "steps": [
+        {
+          "name": "has_funds_requested",
+          "title": "Company has-funds request",
+          "detail": "GET /company-wallet/:companyId/has-funds; cache defaults to true.",
+          "kind": "api",
+          "channel": "GET /company-wallet/:companyId/has-funds",
+          "repo": "saas",
+          "path": "src/handlers/companyWallet/index.ts",
+          "line": 1646,
+          "state": "REQUESTED"
+        },
+        {
+          "name": "has_funds_requested_location",
+          "title": "Location has-funds request",
+          "detail": "GET /location-wallet/:locationId/has-funds; same cache semantics.",
+          "kind": "api",
+          "channel": "GET /location-wallet/:locationId/has-funds",
+          "repo": "saas",
+          "path": "src/handlers/locationWallet/index.ts",
+          "line": 180,
+          "state": "REQUESTED"
+        },
+        {
+          "name": "fund_data_resolved",
+          "title": "Fund data read from cache or wallet",
+          "detail": "Redis walletFundChecker hit returns cached data; miss reads the wallet and caches for 10 min.",
+          "kind": "service",
+          "channel": "",
+          "repo": "saas",
+          "path": "src/handlers/companyWallet/company_wallet.helper.ts",
+          "line": 74,
+          "state": "RESOLVED"
+        },
+        {
+          "name": "has_funds_computed",
+          "title": "hasFunds computed",
+          "detail": "hasFunds = (credits>0 or balance>=0) and status != INACTIVE; no wallet returns {hasFunds:false,noWallet:true}.",
+          "kind": "service",
+          "channel": "",
+          "repo": "saas",
+          "path": "src/handlers/companyWallet/company_wallet.helper.ts",
+          "line": 52,
+          "state": "ANSWERED"
+        },
+        {
+          "name": "cache_refreshed_on_change",
+          "title": "Cache refreshed on wallet change",
+          "detail": "saas Mongo watcher recomputes and writes the fund-check cache when the company wallet changes.",
+          "kind": "cdc/change-stream",
+          "channel": "saas Mongo watcher (company wallets)",
+          "repo": "saas",
+          "path": "src/watcher/helper/companyWallet.ts",
+          "line": 21,
+          "state": "CACHED"
+        }
+      ],
+      "terminal": {
+        "success": ["200 {hasFunds:true,...}"],
+        "failure": [
+          "200 {hasFunds:false}",
+          "200 {hasFunds:false,noWallet:true}",
+          "500 via handleInternalServerError"
+        ]
+      },
+      "gotchas": [
+        "A DB error on wallet lookup is only logged, so the response becomes hasFunds:false,noWallet:true and is cached for 10 min (company_wallet.helper.ts:88-96).",
+        "Routes carry a TODO: RBAC note; companyId/locationId come from params (routes/company_wallet.ts:34, routes/location_wallet.ts:33).",
+        "Billing's own checkFundsV2 is the authoritative gate; this legacy answer can be up to 10 min stale."
+      ]
+    },
+    {
+      "id": "gatekeeper_usage_reservation",
+      "name": "Gatekeeper usage reservation",
+      "group": "Charge & usage",
+      "subject": "company / location",
+      "apps": ["revex-wallet-gatekeeper", "billing"],
+      "trigger": "Product calls validate-event / validate-and-bill-event before usage",
+      "instanceKey": "gatekeeper eventId (usage-policy:<uuid>); attr chargeId = Billing eventId",
+      "summary": "Gatekeeper evaluates policies, reserves Redis counters, then settles via Billing v2 bill (immediately or on billevent/success); counters are reconciled or reverted, with async Mongo durability and a bill-retry sweep for 5xx.",
+      "steps": [
+        {
+          "name": "gk_policy_evaluated",
+          "title": "Policy evaluated (validate)",
+          "detail": "Evaluates hard limit, free limits, funds, entity status and opt-in; denial returns canAccess:false with blockedReasons.",
+          "kind": "api",
+          "channel": "POST validate-event/company | validate-event/location",
+          "repo": "revex",
+          "path": "apps/revex-wallet-gatekeeper/src/services/event.service.ts",
+          "line": 214,
+          "state": "EVALUATED"
+        },
+        {
+          "name": "gk_validate_and_bill",
+          "title": "Validate and bill in one call",
+          "detail": "Evaluates, reserves and calls Billing immediately; denial returns 400 {blockReasons}.",
+          "kind": "api",
+          "channel": "POST validate-and-bill-event",
+          "repo": "revex",
+          "path": "apps/revex-wallet-gatekeeper/src/services/event.service.ts",
+          "line": 347,
+          "state": "EVALUATED"
+        },
+        {
+          "name": "gk_reserved",
+          "title": "Counters reserved",
+          "detail": "Reserves Redis counters and publishes RESERVE durability event; partial reserves are compensated.",
+          "kind": "service",
+          "channel": "topic revex-wallet-gatekeeper-events",
+          "repo": "revex",
+          "path": "apps/revex-wallet-gatekeeper/src/services/event.service.ts",
+          "line": 1098,
+          "state": "COUNTER_RESERVED"
+        },
+        {
+          "name": "gk_settle_requested",
+          "title": "Product reports success",
+          "detail": "billevent/success resolves settle targets, checks wallet/opt-out/scope, then calls Billing.",
+          "kind": "api",
+          "channel": "PUT billevent/success",
+          "repo": "revex",
+          "path": "apps/revex-wallet-gatekeeper/src/services/event.service.ts",
+          "line": 468,
+          "state": "SETTLING"
+        },
+        {
+          "name": "gk_bill_called",
+          "title": "Billing v2 bill called",
+          "detail": "Gatekeeper posts the charge to Billing with chargeId as Billing eventId (continues as wallet_charge).",
+          "kind": "service",
+          "channel": "POST billing-api/v2/bill",
+          "repo": "revex",
+          "path": "apps/revex-wallet-gatekeeper/src/services/billApi.client.ts",
+          "line": 36,
+          "state": "BILL_API_PENDING"
+        },
+        {
+          "name": "gk_bill_retry_pending",
+          "title": "Billing 5xx parked for retry",
+          "detail": "Retryable Billing failure marks event BILL_API_RETRY_PENDING with the stored payload.",
+          "kind": "service",
+          "channel": "",
+          "repo": "revex",
+          "path": "apps/revex-wallet-gatekeeper/src/services/eventBacking.service.ts",
+          "line": 381,
+          "state": "BILL_API_RETRY_PENDING"
+        },
+        {
+          "name": "gk_counter_reconciled",
+          "title": "Counters reconciled",
+          "detail": "On bill 2xx, reconciles counters and publishes RECONCILE; location reservation released if location not billed.",
+          "kind": "service",
+          "channel": "topic revex-wallet-gatekeeper-events",
+          "repo": "revex",
+          "path": "apps/revex-wallet-gatekeeper/src/services/event.service.ts",
+          "line": 1335,
+          "state": "COUNTER_RECONCILED"
+        },
+        {
+          "name": "gk_product_failed",
+          "title": "Product reports failure / revert",
+          "detail": "billevent/failure (or non-5xx bill error) reverts counters and publishes REVERT.",
+          "kind": "api",
+          "channel": "PUT billevent/failure",
+          "repo": "revex",
+          "path": "apps/revex-wallet-gatekeeper/src/services/event.service.ts",
+          "line": 751,
+          "state": "COUNTER_REVERTED"
+        },
+        {
+          "name": "gk_durability_persisted",
+          "title": "Durability event persisted",
+          "detail": "Events worker writes reserve/reconcile/revert to gatekeeper_event_metadata in Mongo.",
+          "kind": "pubsub-worker",
+          "channel": "sub revex-gatekeeper-events-sub",
+          "repo": "revex",
+          "path": "apps/revex-wallet-gatekeeper/workers/helper/gatekeeperEventsWorkerHelper.ts",
+          "line": 87,
+          "state": "PERSISTED"
+        },
+        {
+          "name": "gk_bill_retry_sweep_triggered",
+          "title": "Bill-retry sweep triggered",
+          "detail": "External cron hits the sweep route, which publishes BILL_RETRY_SWEEP and returns 202.",
+          "kind": "cron",
+          "channel": "POST bill-retry/sweep",
+          "repo": "revex",
+          "path": "apps/revex-wallet-gatekeeper/src/controllers/gatekeeper.controller.ts",
+          "line": 250,
+          "state": "BILL_API_RETRY_PENDING"
+        },
+        {
+          "name": "gk_bill_retry_swept",
+          "title": "Parked events retried",
+          "detail": "Worker retries up to 50 parked events, max 5 attempts each; exhaustion reverts with BILL_RETRY_EXHAUSTED.",
+          "kind": "pubsub-worker",
+          "channel": "sub revex-gatekeeper-events-sub (BILL_RETRY_SWEEP)",
+          "repo": "revex",
+          "path": "apps/revex-wallet-gatekeeper/src/scheduler/billRetry.scheduler.ts",
+          "line": 141,
+          "state": "BILL_API_SUCCESS"
+        },
+        {
+          "name": "gk_stuck_reconciled",
+          "title": "Stuck reservation reconciler",
+          "detail": "Reverts or retries events stuck in COUNTER_RESERVED; only triggered from the QA endpoint.",
+          "kind": "api",
+          "channel": "POST /internal/cron/reconcile",
+          "repo": "revex",
+          "path": "apps/revex-wallet-gatekeeper/src/services/stuckEventReconciler.service.ts",
+          "line": 126,
+          "state": "COUNTER_REVERTED"
+        }
+      ],
+      "terminal": {
+        "success": [
+          "COUNTER_RECONCILED + BILL_API_SUCCESS (derived SUCCESSFUL)",
+          "Company-only reconcile when location ineligible / not billed"
+        ],
+        "failure": [
+          "Denied (400 blockReasons / canAccess:false)",
+          "COUNTER_REVERTED with BILL_API_ERROR, BILL_RETRY_EXHAUSTED, BILL_RETRY_NO_PAYLOAD or BILL_RETRY_POINTER_EXPIRED",
+          "409 EVENT_STATE_CONFLICT",
+          "Stuck in COUNTER_RESERVED until TTL"
+        ]
+      },
+      "gotchas": [
+        "Bill-retry sweep has no in-app timer and no CronJob in this app's deployments; per inventory it runs once a day (30 6 * * *) from platform-backend crons, so a parked event can wait ~24h per attempt.",
+        "StuckEventReconciler is only wired to the QA endpoint (qaTesting.controller.ts:67).",
+        "Idempotent replay of billevent/success|failure on a settled event returns HTTP 422, not 200 (gatekeeper.controller.ts:156-163)."
+      ]
+    },
+    {
+      "id": "free_units_and_usage_caps",
+      "name": "Free units, usage caps and the switch to billed usage",
+      "group": "Charge & usage",
+      "subject": "company / location",
+      "apps": ["revex-wallet-gatekeeper", "billing", "blade-platform"],
+      "trigger": "A product service calls Gatekeeper POST validate-event/location (or validate-event/company / validate-and-bill-event) before metered usage, then PUT billevent/success to settle",
+      "instanceKey": "eventId (Redis meta hash per source) + chargeId (Billing dedup key)",
+      "summary": "Gatekeeper resolves the governing gatekeeper_policy_schema (else a live gatekeeper_policy_template, else a legacy fallback), turns a FREE tier into a FREE_LIMITS check and a capped PAYG tier into a HARD_LIMIT check, and reads both against Redis counters versioned per policy window. A request that fits inside the free allowance is chargeMode FREE; one that crosses it is BILLABLE in full; HARD_LIMIT or a STOP free tier denies. At settle, FREE waives only the location side as a $0 isFreeTier charge; the company side is always priced and funds-checked by Billing.",
+      "steps": [
+        {
+          "name": "validate_event_request",
+          "title": "Validate request",
+          "detail": "Product calls validate-event/location (or /company, validate-and-bill-event) with product/subProduct and reserveUsage UNIT/AMOUNT; reserve:false is an availability-only check (event.service.ts:218-219).",
+          "kind": "api",
+          "channel": "POST validate-event/location",
+          "repo": "revex",
+          "path": "apps/revex-wallet-gatekeeper/src/controllers/gatekeeper.controller.ts",
+          "line": 89,
+          "state": "VALIDATE_REQUESTED"
+        },
+        {
+          "name": "ensure_policy_window",
+          "title": "Roll over expired window",
+          "detail": "Per source (SAAS_PLAN, INFRA_PLAN) the latest ACTIVE isRecurring doc past its endDate is cloned as policyVersion+1 with a new window; counters start from zero under the new version. MONTHLY = +1 calendar month, WEEKLY/7DAYS/60DAYS/90DAYS fixed days, LIFETIME never resets.",
+          "kind": "service",
+          "channel": "",
+          "repo": "revex",
+          "path": "apps/revex-wallet-gatekeeper/src/services/policyWindow.ts",
+          "line": 41,
+          "state": "POLICY_WINDOW_CHECKED"
+        },
+        {
+          "name": "resolve_policy_or_template",
+          "title": "Resolve governing policy",
+          "detail": "ACTIVE gatekeeper_policy_schema docs; else a live gatekeeper_policy_template (location level only); else legacy ENTITY_STATUS+PRODUCT_OPTIN+FUNDS; else deny NO_POLICY_OR_TEMPLATE. ENTITY_STATUS and PRODUCT_OPTIN always apply.",
+          "kind": "service",
+          "channel": "",
+          "repo": "revex",
+          "path": "apps/revex-wallet-gatekeeper/src/engine/evaluator.service.ts",
+          "line": 156,
+          "state": "POLICY_RESOLVED"
+        },
+        {
+          "name": "map_tiers_to_evaluators",
+          "title": "Tiers to evaluators",
+          "detail": "FREE tier upTo becomes FREE_LIMITS{limit:upTo, blocking when onExhaust==STOP}; the PAYG tier with onExhaust STOP and the largest upTo becomes HARD_LIMIT. Uncapped PAYG (upTo null) has no cap. Field is AMOUNT for CURRENCY metering, else UNIT.",
+          "kind": "service",
+          "channel": "",
+          "repo": "revex",
+          "path": "apps/revex-wallet-gatekeeper/src/engine/mapTiersToEvaluators.ts",
+          "line": 37,
+          "state": "TIERS_MAPPED"
+        },
+        {
+          "name": "hydrate_counters",
+          "title": "Hydrate usage counters",
+          "detail": "Read-through Redis then Mongo gatekeeper_policy_counter, key ctr:{loc_<loc>:prod_<prod>}[:subProduct]:<source>:v<policyVersion>:unit|amount plus a :free key for the location free share. COMPANY counters have no free split.",
+          "kind": "service",
+          "channel": "",
+          "repo": "revex",
+          "path": "apps/revex-wallet-gatekeeper/src/hydrates/hydration.service.ts",
+          "line": 190,
+          "state": "COUNTERS_HYDRATED"
+        },
+        {
+          "name": "evaluate_free_limits",
+          "title": "Free-tier check",
+          "detail": "Non-blocking (NEXT): withinFreeTier = freeUsed+requested <= limit, otherwise allowed but billed in full. Blocking (STOP): free while freeUsed < limit, then denied FREE_LIMIT_EXCEEDED.",
+          "kind": "service",
+          "channel": "",
+          "repo": "revex",
+          "path": "apps/revex-wallet-gatekeeper/src/evaluators/freeLimits.evaluator.ts",
+          "line": 142,
+          "state": "FREE_TIER_EVALUATED"
+        },
+        {
+          "name": "evaluate_hard_limit",
+          "title": "Hard cap check",
+          "detail": "Denies HARD_LIMIT when used+requested > limit; a 0-size request is denied once used >= limit.",
+          "kind": "service",
+          "channel": "",
+          "repo": "revex",
+          "path": "apps/revex-wallet-gatekeeper/src/evaluators/hardLimit.evaluator.ts",
+          "line": 69,
+          "state": "CAP_EVALUATED"
+        },
+        {
+          "name": "consolidate_charge_mode",
+          "title": "Decide FREE vs BILLABLE",
+          "detail": "Any deny wins. chargeMode is FREE only when allowed, at least one free-tier verdict exists and all are withinFreeTier; across sources every source must say FREE (evaluator.service.ts:406-410).",
+          "kind": "service",
+          "channel": "",
+          "repo": "revex",
+          "path": "apps/revex-wallet-gatekeeper/src/engine/consolidate.ts",
+          "line": 85,
+          "state": "CHARGE_MODE_DECIDED"
+        },
+        {
+          "name": "funds_check_when_billable",
+          "title": "Funds gate if billable",
+          "detail": "On reserve:false, FREE skips FUNDS; BILLABLE runs FUNDS (complimentaryCredits > 0 || balance >= 0) and denies LOCATION_/COMPANY_WALLET_BALANCE_NEGATIVE_OR_ZERO. On reserve:true FUNDS runs only in the legacy fallback.",
+          "kind": "service",
+          "channel": "",
+          "repo": "revex",
+          "path": "apps/revex-wallet-gatekeeper/src/engine/evaluator.service.ts",
+          "line": 213,
+          "state": "FUNDS_CHECKED"
+        },
+        {
+          "name": "reserve_counters",
+          "title": "Reserve in Redis",
+          "detail": "RESERVE_LUA INCRBYFLOATs the unit/amount counters and stores counterState COUNTER_RESERVED + chargeMode in the meta hash; FREE also bumps existing :free keys. The limit is not re-checked here.",
+          "kind": "service",
+          "channel": "",
+          "repo": "revex",
+          "path": "apps/revex-wallet-gatekeeper/src/services/event.service.ts",
+          "line": 1098,
+          "state": "COUNTER_RESERVED"
+        },
+        {
+          "name": "settle_decide_waiver",
+          "title": "Settle: waive location?",
+          "detail": "On billevent/success, waiveLocationCharge = locationEligible && every source chargeMode == FREE (Gatekeeper overrides the caller), then POST billing-api v2/bill with eventId=chargeId.",
+          "kind": "api",
+          "channel": "PUT billevent/success",
+          "repo": "revex",
+          "path": "apps/revex-wallet-gatekeeper/src/services/event.service.ts",
+          "line": 878,
+          "state": "SETTLE_REQUESTED"
+        },
+        {
+          "name": "price_charge",
+          "title": "Price company + location",
+          "detail": "processV2 always prices the company charge (base price plus markup/discount). With waiveLocationCharge the location charge is price 0, amount 0, isFreeTier:true; otherwise fix-price or markup rebilling.",
+          "kind": "api",
+          "channel": "POST billing-api/v2/bill",
+          "repo": "revex",
+          "path": "apps/billing/src/services/billing.service.ts",
+          "line": 490,
+          "state": "CHARGE_PRICED"
+        },
+        {
+          "name": "billing_funds_check",
+          "title": "Billing funds check",
+          "detail": "checkFundsV2 throws FUND_CHECK_FAILED unless complimentaryCredits > 0 || currentBalance >= 0 and the wallet is active. The charge amount is not compared, so balances can go negative.",
+          "kind": "service",
+          "channel": "",
+          "repo": "revex",
+          "path": "apps/billing/src/services/billing.service.ts",
+          "line": 730,
+          "state": "FUNDS_VERIFIED"
+        },
+        {
+          "name": "reconcile_counters",
+          "title": "Reconcile counters",
+          "detail": "RECONCILE_LUA applies actual-minus-reserved with compare-and-set on COUNTER_RESERVED and mirrors it to :free keys for FREE events; gatekeeper_policy_counter splits used into freeUsage and nonFreeUsage.",
+          "kind": "service",
+          "channel": "",
+          "repo": "revex",
+          "path": "apps/revex-wallet-gatekeeper/src/services/event.service.ts",
+          "line": 1335,
+          "state": "COUNTER_RECONCILED"
+        }
+      ],
+      "terminal": {
+        "success": [
+          "chargeMode FREE: $0 isFreeTier location charge, company still billed",
+          "chargeMode BILLABLE: charge booked and settled against the wallet",
+          "COUNTER_RECONCILED"
+        ],
+        "failure": [
+          "FREE_LIMIT_EXCEEDED (STOP free tier used up)",
+          "HARD_LIMIT (capped PAYG tier reached)",
+          "LOCATION_/COMPANY_WALLET_BALANCE_NEGATIVE_OR_ZERO",
+          "PRODUCT_OPTIN_DISABLED_* / PRODUCT_CONFIG_NOT_FOUND",
+          "COMPANY_/LOCATION_WALLET_INACTIVE",
+          "NO_POLICY_OR_TEMPLATE",
+          "Billing FUND_CHECK_FAILED: counters reverted (COUNTER_REVERTED)"
+        ]
+      },
+      "gotchas": [
+        "There is no single bundle-limit field: the limit is the FREE tier's upTo in the governing policy, compared against a per-window counter (mapTiersToEvaluators.ts:46-75, keys.ts:221-244).",
+        "Free waives only the location side. The company charge is always priced and billed (event.service.ts:380-386; billing.service.ts:477-486 vs 490-506).",
+        "A request is never split: one that crosses the free ceiling is billed in full even with free units left; leftovers stay usable for later smaller requests (freeLimits.evaluator.ts:100-106, 179-182).",
+        "A STOP free tier lets one oversized request through as fully free while any free units remain; the next is denied (freeLimits.evaluator.ts:168-171).",
+        "Evaluate and reserve are not atomic: RESERVE_LUA has no limit re-check, so concurrent requests can overshoot HARD_LIMIT or the free allowance (reserve.ts:28-29).",
+        "An unreliable :free counter falls back to total used, which can only over-bill, never over-grant (hydration.service.ts:177-185; freeLimits.evaluator.ts:57).",
+        "Uncapped PAYG creates no HARD_LIMIT, and on reserving calls FUNDS runs only in the legacy fallback, so policy-governed usage is funds-checked only later by Billing (evaluator.service.ts:70-77, 324-347).",
+        "Funds rule is complimentaryCredits > 0 || balance >= 0 with no amount comparison, so wallets can go negative (funds.evaluator.ts:38-42; companyWallet.service.ts:200-209).",
+        "Free units reset only by window rollover to a new policyVersion, on the request path, for isRecurring ACTIVE docs; template interval defaults to LIFETIME and template-only sources never roll over (policyWindow.ts:46-60; policyTemplate.schema.ts:128-131; event.service.ts:1521-1522).",
+        "Not traced: where usage settlement consumes complimentary credits before cash balance; the settling code is outside ghl-revex-backend and saas-service (comment at companyWallet.service.ts:200-208)."
+      ]
+    },
+    {
+      "id": "enterprise_discount_config",
+      "name": "Enterprise discount for Email and Email Verification",
+      "group": "Charge & usage",
+      "subject": "company",
+      "apps": ["billing", "email-isv (marketplace-backend)", "blade-platform support portal"],
+      "trigger": "Support or the Wallet team sets a discount for one agency in Employee portal > Wallet > Discount Config, which calls PUT billing-config/company/:companyId/products/:productCode/discount-config",
+      "instanceKey": "companyId + productCode (products.<productCode>.discountConfig on the company billing config)",
+      "summary": "Enterprise pricing for Email is configured as a discount, not a new base price. Email Isv sends every Email bill event with its own price and a company config that has discount 0, so the company basePrice in billing config is never read for Email. Billing merges the saved company config under the event, which keeps the saved discountConfig rules, then applies the first matching, in-date rule to the agency (company) charge. The sub-account charge is still priced from the undiscounted amount unless passOn is true. The only true per-agency Email base price today is a hard-coded list of agencies in marketplace-backend, which needs a code deploy to change.",
+      "steps": [
+        {
+          "name": "open_discount_config",
+          "title": "Open Discount Config",
+          "detail": "Employee portal Wallet page embeds the blade-platform support Discount Config app. It loads the current product config for an agency and product code (Email, EmailVerification, EmailSmtp, EmailNotification).",
+          "kind": "api",
+          "channel": "Employee portal > Wallet > Discount Config",
+          "repo": "employee-portal",
+          "path": "src/components/wallet/Wallet.vue",
+          "line": 10,
+          "state": "CONFIG_OPENED"
+        },
+        {
+          "name": "submit_discount_config",
+          "title": "Submit rules",
+          "detail": "The support portal sends the whole product config with discountConfig { passOn, rules[] } through the SAAS_BILLING_V2 proxy.",
+          "kind": "api",
+          "channel": "PUT billing-config/company/:companyId/products/:productCode/discount-config",
+          "repo": "revex-frontend",
+          "path": "apps/blade-platform/src/composables/useSupportPortalService.ts",
+          "line": 267,
+          "state": "CONFIG_SUBMITTED"
+        },
+        {
+          "name": "authorize_and_validate",
+          "title": "Authorize and validate",
+          "detail": "Route is Istio-mesh only and mapped to the BLADE_INTERNAL_ACCESS scope. DTO needs at least 1 rule; each rule needs name, priority 0 to 1,000,000, a validity window, at least 1 condition and an apply_discount action. discountType is percentage (max 100) or fixed.",
+          "kind": "api",
+          "channel": "PUT billing-config/company/:companyId/products/:productCode/discount-config",
+          "repo": "revex",
+          "path": "apps/billing/src/controllers/baasConfig.controller.ts",
+          "line": 130,
+          "state": "CONFIG_VALIDATED"
+        },
+        {
+          "name": "upsert_company_config",
+          "title": "Save company config",
+          "detail": "Checks the company exists and the product code is registered, rejects duplicate rule ids and endDate <= startDate, assigns rule ids, then replaces products.<productCode> on the company billing config. Omitted enabled, markup, basePrice and optIn fall back to defaults (true, 0, 0, true).",
+          "kind": "service",
+          "channel": "",
+          "repo": "revex",
+          "path": "apps/billing/src/services/discountConfig.service.ts",
+          "line": 93,
+          "state": "CONFIG_SAVED"
+        },
+        {
+          "name": "email_price_resolved",
+          "title": "Email price resolved",
+          "detail": "For an agency under GHL billing, Email Isv uses the agency's price from the hard-coded EMAIL_BILLING_COMPANY_ID list, else 0.000675. Otherwise it uses the sub-account rebilling price. Price is multiplied by to + cc + bcc count.",
+          "kind": "pubsub-worker",
+          "channel": "",
+          "repo": "marketplace",
+          "path": "apps/email-isv/workers/handlers/emailBillingRequestWorker.handler.ts",
+          "line": 233,
+          "state": "PRICE_RESOLVED"
+        },
+        {
+          "name": "email_bill_event_sent",
+          "title": "Bill event sent",
+          "detail": "Email bill body carries price = emailCharge and an embedded companyConfig { basePrice: emailCharge, markup: 0, discount: 0 }. Email Verification sends price = charge with no embedded config.",
+          "kind": "api",
+          "channel": "Blade internal bill API",
+          "repo": "marketplace",
+          "path": "apps/email-isv/workers/handlers/emailBillingRequestWorker.handler.ts",
+          "line": 317,
+          "state": "BILL_EVENT_SENT"
+        },
+        {
+          "name": "config_merged",
+          "title": "Config merged",
+          "detail": "Company config = global default, then saved company config, then event.companyConfig. The event's discount 0 overrides any flat discount for Email, but the saved discountConfig rules survive because the event does not send that key.",
+          "kind": "service",
+          "channel": "",
+          "repo": "revex",
+          "path": "apps/billing/src/services/billing.service.ts",
+          "line": 110,
+          "state": "CONFIG_MERGED"
+        },
+        {
+          "name": "price_taken_from_event",
+          "title": "Price taken from event",
+          "detail": "event.price wins over companyConfig.basePrice. So changing basePrice in billing config does not change what Email costs.",
+          "kind": "service",
+          "channel": "",
+          "repo": "revex",
+          "path": "apps/billing/src/services/billing.service.ts",
+          "line": 187,
+          "state": "PRICE_SET"
+        },
+        {
+          "name": "rule_evaluated",
+          "title": "Rule evaluated",
+          "detail": "Rules are sorted by priority (highest first). The first rule that is inside its validity window and whose conditions all match eventBody (for example charge-type equals 'Email Charge') wins. With no agency match, billing falls back to built-in global rules, which today exist only for LC Phone charge types.",
+          "kind": "service",
+          "channel": "",
+          "repo": "revex",
+          "path": "apps/billing/src/helpers/billing.helper.ts",
+          "line": 37,
+          "state": "RULE_MATCHED"
+        },
+        {
+          "name": "company_discount_applied",
+          "title": "Agency discount applied",
+          "detail": "percentage takes that share off the rebilled amount; fixed takes a flat amount off each bill event. If the discount is larger than the amount, no discount is applied.",
+          "kind": "service",
+          "channel": "",
+          "repo": "revex",
+          "path": "apps/billing/src/helpers/rule-evaluator.helper.ts",
+          "line": 201,
+          "state": "COMPANY_CHARGE_DISCOUNTED"
+        },
+        {
+          "name": "location_charge_priced",
+          "title": "Sub-account charge priced",
+          "detail": "Location charge starts from the undiscounted company amount plus location markup. Agency rules apply here only when passOn is true.",
+          "kind": "service",
+          "channel": "",
+          "repo": "revex",
+          "path": "apps/billing/src/services/billing.service.ts",
+          "line": 235,
+          "state": "LOCATION_CHARGE_PRICED"
+        }
+      ],
+      "terminal": {
+        "success": [
+          "Agency wallet charged the discounted company amount",
+          "Sub-account rebilling unchanged unless passOn is true"
+        ],
+        "failure": [
+          "400 on invalid rules (percentage over 100, duplicate rule id, endDate not after startDate)",
+          "404 when the company or product code is unknown",
+          "Rule past endDate: full price resumes with no alert"
+        ]
+      },
+      "gotchas": [
+        "Setting basePrice for Email in billing config has no effect: Email Isv always sends its own price.",
+        "A true per-agency Email base price exists only as the hard-coded EMAIL_BILLING_COMPANY_ID list (5 agencies) in marketplace-backend const.ts; changing it needs a code deploy.",
+        "The flat discount field is ignored for Email because the event sends discount 0. Use discountConfig rules.",
+        "fixed discounts are per bill event, not per recipient. One email to 10 recipients gets one fixed discount. Prefer percentage.",
+        "The PUT replaces the whole product config. Send the current enabled, markup and optIn values, or they reset to defaults.",
+        "Rules expire silently at endDate. Track renewal dates for enterprise contracts.",
+        "Dedicated IP is not billed through the wallet in these repos, so this flow does not cover it. Confirm its pricing path with the Email team."
+      ]
+    },
+    {
+      "id": "wallet_usage_alert",
+      "name": "Wallet usage threshold alert",
+      "group": "Charge & usage",
+      "subject": "company (branch agency / location)",
+      "apps": ["blade-platform"],
+      "trigger": "Company wallet transaction settlement (TRANSACTION_SETTLEMENT_EVENT)",
+      "instanceKey": "transactionId (per-send key wallet-usage-notification-send-{companyId}[-{locationId}]-...)",
+      "summary": "Each settled company-wallet txn increments Redis usage counters, then a threshold check compares usage against agency/sub-account thresholds and emails when exceeded, rate-limited per frequency. Gated by REVEX_BLADE_WALLET_USAGE_NOTIFICATION_MODE.",
+      "steps": [
+        {
+          "name": "txn_settlement_received",
+          "title": "Settlement analytics event",
+          "detail": "Analytics worker handles TRANSACTION_SETTLEMENT_EVENT, deduped by txn _id.",
+          "kind": "pubsub-worker",
+          "channel": "transaction-settlement-event (analytics worker)",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/Analytics/analytics.service.ts",
+          "line": 545,
+          "state": "RECEIVED"
+        },
+        {
+          "name": "usage_update_published",
+          "title": "Usage update published",
+          "detail": "COMPANY wallet settlements only publish the usage update event.",
+          "kind": "service",
+          "channel": "topic revex-blade-wallet-usage-notification-events",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/Analytics/analytics.service.ts",
+          "line": 680,
+          "state": "QUEUED"
+        },
+        {
+          "name": "usage_update_routed",
+          "title": "Worker routes usage update",
+          "detail": "Worker checks mode (collect gate) and dispatches REVEX_BLADE_WALLET_USAGE_UPDATE_EVENT.",
+          "kind": "pubsub-worker",
+          "channel": "sub revex-blade-wallet-usage-notification-events-sub",
+          "repo": "revex",
+          "path": "apps/blade-platform/workers/helper/walletUsageNotificationHelper.ts",
+          "line": 84,
+          "state": "COLLECTING"
+        },
+        {
+          "name": "usage_cache_incremented",
+          "title": "Usage counters incremented",
+          "detail": "Skips non-usage/duplicate (15-min lock on transactionId)/no-threshold txns; increments agency and location Redis usage.",
+          "kind": "service",
+          "channel": "",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/Notifications/notifications.service.ts",
+          "line": 2444,
+          "state": "USAGE_UPDATED"
+        },
+        {
+          "name": "threshold_check_published",
+          "title": "Threshold check published",
+          "detail": "Publishes REVEX_BLADE_WALLET_USAGE_NOTIFICATION_EVENT when mode allows sending.",
+          "kind": "service",
+          "channel": "topic revex-blade-wallet-usage-notification-events",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/Notifications/notifications.service.ts",
+          "line": 2706,
+          "state": "CHECK_QUEUED"
+        },
+        {
+          "name": "threshold_check_started",
+          "title": "Threshold check started",
+          "detail": "Takes in-flight lock, skips inactive wallet / disabled config / missing usage cache.",
+          "kind": "pubsub-worker",
+          "channel": "sub revex-blade-wallet-usage-notification-events-sub",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/Notifications/notifications.service.ts",
+          "line": 1135,
+          "state": "CHECKING"
+        },
+        {
+          "name": "thresholds_evaluated",
+          "title": "Threshold evaluated",
+          "detail": "Per threshold: calendar rate limit, alert lock, usage summary and product usages.",
+          "kind": "service",
+          "channel": "",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/Notifications/notifications.service.ts",
+          "line": 1801,
+          "state": "EVALUATED"
+        },
+        {
+          "name": "email_sent",
+          "title": "Alert email sent",
+          "detail": "Builds recipients and sends the usage-threshold-exceeded email.",
+          "kind": "service",
+          "channel": "",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/Notifications/notification.helper.ts",
+          "line": 2290,
+          "state": "NOTIFIED"
+        },
+        {
+          "name": "audit_logged",
+          "title": "Audit log written",
+          "detail": "Writes walletnotificationauditlogs entry used by rate limiting.",
+          "kind": "service",
+          "channel": "",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/Notifications/notification.helper.ts",
+          "line": 2942,
+          "state": "NOTIFIED"
+        },
+        {
+          "name": "threshold_last_sent_updated",
+          "title": "Threshold last-sent stamped",
+          "detail": "Updates usagethreshold.lastNotificationSentAt.",
+          "kind": "service",
+          "channel": "",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/Notifications/notifications.service.ts",
+          "line": 2129,
+          "state": "DONE"
+        }
+      ],
+      "terminal": {
+        "success": [
+          "Email sent + audit log + lastNotificationSentAt",
+          "Below threshold (silent)",
+          "Skipped by mode / precheck / rate limit / alert lock"
+        ],
+        "failure": [
+          "Email send failed (acked, not retried)",
+          "Exception -> nack -> redelivery / DL worker"
+        ]
+      },
+      "gotchas": [
+        "Email failures are logged and acked; the alert is lost (notifications.service.ts:1244-1300).",
+        "Only COMPANY-wallet settlements feed it; rebilled location-wallet txns are excluded (analytics.service.ts:680).",
+        "Production gates: mode send, collect after 2026-06-15, send after 2026-09-01 (values.revex-blade-wallet-usage-notification-worker.yaml:85-87)."
+      ]
+    },
+    {
+      "id": "wallet_credits_added",
+      "name": "Wallet credits added",
+      "group": "Credits & refunds",
+      "subject": "company",
+      "apps": ["blade-platform"],
+      "trigger": "Admin PUT add-credits, support POST add-credits, or async user-action credits",
+      "instanceKey": "credit txn id (sync) / companyId:creditType:subType (user action)",
+      "summary": "Complimentary credits (trial, promotional, kickoff, launchpad, retention) are written as a PENDING CREDIT txn and settled into walletCredits by the pending-settlement worker.",
+      "steps": [
+        {
+          "name": "credits_requested_sync",
+          "title": "Admin adds credits",
+          "detail": "Sync admin add-credits call guarded by CanAddWalletCreditsGuard.",
+          "kind": "api",
+          "channel": "PUT /company-wallet/add-credits",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/CompanyWallet/companyWallet.controller.ts",
+          "line": 61,
+          "state": "REQUESTED"
+        },
+        {
+          "name": "support_credits_requested",
+          "title": "Support adds credits",
+          "detail": "Support portal add-credits (sourceId support_portal), returns 202.",
+          "kind": "api",
+          "channel": "POST /support/company-wallet/add-credits",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/transactions/controllers/support.controller.ts",
+          "line": 162,
+          "state": "REQUESTED"
+        },
+        {
+          "name": "user_action_credits_requested",
+          "title": "User-action credits claimed",
+          "detail": "Claims a uniqueness instance, resolves amount, then publishes async event.",
+          "kind": "api",
+          "channel": "PUT /company-wallet/user-action-credits",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/CompanyWallet/companyWallet.controller.ts",
+          "line": 132,
+          "state": "UNIQUENESS_CLAIMED"
+        },
+        {
+          "name": "add_credits_event_published",
+          "title": "Add-credits event published",
+          "detail": "Publishes REVEX_BLADE_ADD_CREDITS_ON_USER_ACTION to the misc-task worker.",
+          "kind": "service",
+          "channel": "REVEX_BLADE_MISCELLANEOUS_TASK_WORKER / REVEX_BLADE_ADD_CREDITS_ON_USER_ACTION",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/CompanyWallet/companyWallet.service.ts",
+          "line": 846,
+          "state": "QUEUED"
+        },
+        {
+          "name": "user_action_worker",
+          "title": "Misc worker adds credits",
+          "detail": "Misc-task worker calls addCredits with addedBy USER_ACTION.",
+          "kind": "pubsub-worker",
+          "channel": "REVEX_BLADE_ADD_CREDITS_ON_USER_ACTION",
+          "repo": "revex",
+          "path": "apps/blade-platform/workers/helper/walletMiscellaneousTaskWorker.helper.ts",
+          "line": 250,
+          "state": "PROCESSING"
+        },
+        {
+          "name": "credits_validated",
+          "title": "Credits validated",
+          "detail": "Per-creditType checks for amount, campaign and one-time use against dailyCreditLog.",
+          "kind": "service",
+          "channel": "",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/CompanyWallet/companyWallet.service.ts",
+          "line": 276,
+          "state": "VALIDATED"
+        },
+        {
+          "name": "credit_txn_created",
+          "title": "Credit txn inserted",
+          "detail": "Inserts a CREDIT txn with state PENDING and complimentary chargeType.",
+          "kind": "service",
+          "channel": "companywallettransactions",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/CompanyWallet/companyWallet.queries.ts",
+          "line": 159,
+          "state": "PENDING"
+        },
+        {
+          "name": "credit_added_event_published",
+          "title": "Credit-added event published",
+          "detail": "Publishes REVEX_BLADE_WALLET_CREDITS_ADDED_EVENT for the notifications worker.",
+          "kind": "service",
+          "channel": "REVEX_BLADE_WALLET_CREDITS_ADDED_EVENT",
+          "repo": "revex",
+          "path": "apps/blade-platform/common/helpers/walletCreditLog.helper.ts",
+          "line": 34,
+          "state": "PENDING"
+        },
+        {
+          "name": "daily_credit_log_saved",
+          "title": "Daily credit log saved",
+          "detail": "Notifications worker inserts the dailyCreditLogs row.",
+          "kind": "pubsub-worker",
+          "channel": "REVEX_BLADE_WALLET_CREDITS_ADDED_EVENT",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/Notifications/notifications.service.ts",
+          "line": 849,
+          "state": "LOGGED"
+        },
+        {
+          "name": "wallet_txn_settled",
+          "title": "Credit settled into walletCredits",
+          "detail": "Pending-settlement processor completes the txn and adds amount to complimentary credits.",
+          "kind": "cdc/change-stream",
+          "channel": "wallet txn CDC -> wallet worker",
+          "repo": "revex",
+          "path": "apps/blade-platform/workers/helper/wallet-worker/pendingSettlement.processor.ts",
+          "line": 123,
+          "state": "COMPLETED"
+        },
+        {
+          "name": "credit_log_email_sent",
+          "title": "Daily credit log email",
+          "detail": "Daily cron (0 05 * * *) triggers the credit-log emailer.",
+          "kind": "cron",
+          "channel": "POST /daily-credit-log/trigger-cron",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/DailyCreditLog/dailyCreditLog.controller.ts",
+          "line": 22,
+          "state": "EMAILED"
+        }
+      ],
+      "terminal": {
+        "success": ["Txn CREDIT COMPLETED, wallet complimentaryCredits increased"],
+        "failure": [
+          "400 missing amount/campaign",
+          "409 campaign/event/action already used",
+          "500 company wallet does not exist",
+          "User-action worker error swallowed (credits lost)"
+        ]
+      },
+      "gotchas": [
+        "User-action worker catches errors and returns undefined, so credits can be lost while the uniqueness key stays claimed (walletMiscellaneousTaskWorker.helper.ts:250).",
+        "One-time-use checks read dailyCreditLog, which is written async after the txn, so concurrent adds can both pass (TOCTOU).",
+        "Location complimentary-credit endpoints are commented out; only company wallets receive credits."
+      ]
+    },
+    {
+      "id": "wallet_stripe_refund",
+      "name": "Wallet Stripe refund",
+      "group": "Credits & refunds",
+      "subject": "company",
+      "apps": ["blade-platform"],
+      "trigger": "POST /refund (mesh-only, async) or POST /refund/with-auto-recharge-control (sync)",
+      "instanceKey": "refundId (Refund doc _id)",
+      "summary": "Refunds agency wallet money back to the card by iterating Stripe_Payment credit txns, refunding each via Stripe and debiting the wallet in a Mongo txn.",
+      "steps": [
+        {
+          "name": "refund_requested",
+          "title": "Refund requested",
+          "detail": "Mesh-only API receives refund request with agentEmail from sourceId.",
+          "kind": "api",
+          "channel": "POST /refund",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/Refund/refund.controller.ts",
+          "line": 27,
+          "state": "REQUESTED"
+        },
+        {
+          "name": "refund_validated",
+          "title": "Refund validated",
+          "detail": "Validates input, company and eligible total; computes full-refund amount.",
+          "kind": "service",
+          "channel": "",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/Refund/refund.service.ts",
+          "line": 93,
+          "state": "VALIDATED"
+        },
+        {
+          "name": "refund_record_created",
+          "title": "Refund record created",
+          "detail": "Creates Refund doc with status PENDING; may disable auto-recharge on full refund.",
+          "kind": "service",
+          "channel": "refunds",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/Refund/refund.service.ts",
+          "line": 198,
+          "state": "PENDING"
+        },
+        {
+          "name": "refund_event_published",
+          "title": "Refund event published",
+          "detail": "Publishes REVEX_BLADE_REFUND_PROCESSING_EVENT to the misc-task worker.",
+          "kind": "service",
+          "channel": "REVEX_BLADE_MISCELLANEOUS_TASK_WORKER / REVEX_BLADE_REFUND_PROCESSING_EVENT",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/Refund/refund.service.ts",
+          "line": 251,
+          "state": "PENDING"
+        },
+        {
+          "name": "refund_worker_dispatch",
+          "title": "Misc worker picks refund",
+          "detail": "Misc-task worker routes the event to processRefundTransaction.",
+          "kind": "pubsub-worker",
+          "channel": "revex-blade-miscellaneous-task-events-sub",
+          "repo": "revex",
+          "path": "apps/blade-platform/workers/helper/walletMiscellaneousTaskWorker.helper.ts",
+          "line": 212,
+          "state": "PENDING"
+        },
+        {
+          "name": "refund_iteration",
+          "title": "Refund iteration starts",
+          "detail": "Per-iteration handler; dedupes terminal statuses.",
+          "kind": "pubsub-worker",
+          "channel": "REVEX_BLADE_REFUND_PROCESSING_EVENT",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/Refund/refund.service.ts",
+          "line": 1210,
+          "state": "PENDING"
+        },
+        {
+          "name": "refund_lock_acquired",
+          "title": "Wallet lock acquired",
+          "detail": "Redlock on the company wallet; failure marks refund FAILED.",
+          "kind": "service",
+          "channel": "Redis redlock",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/Refund/refund.service.ts",
+          "line": 1230,
+          "state": "PENDING"
+        },
+        {
+          "name": "refund_in_progress",
+          "title": "Refund marked in progress",
+          "detail": "Wallet threshold checked, Refund status set IN_PROGRESS.",
+          "kind": "service",
+          "channel": "refunds",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/Refund/refund.service.ts",
+          "line": 1439,
+          "state": "IN_PROGRESS"
+        },
+        {
+          "name": "stripe_refund_succeeded",
+          "title": "Stripe refund issued",
+          "detail": "Refunds the eligible payment intent via StripeHelper.refundPaymentIntent.",
+          "kind": "service",
+          "channel": "Stripe refunds API",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/Refund/refund.service.ts",
+          "line": 1514,
+          "state": "IN_PROGRESS"
+        },
+        {
+          "name": "refund_txn_recorded",
+          "title": "Refund debit recorded",
+          "detail": "Mongo txn writes Stripe_Refund DEBIT COMPLETED and decrements currentBalance.",
+          "kind": "service",
+          "channel": "companywallettransactions",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/Refund/refund.service.ts",
+          "line": 1551,
+          "state": "IN_PROGRESS"
+        },
+        {
+          "name": "next_iteration_published",
+          "title": "Next iteration or complete",
+          "detail": "Re-publishes the processing event for the next txn, or completes the refund.",
+          "kind": "service",
+          "channel": "REVEX_BLADE_REFUND_PROCESSING_EVENT",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/Refund/refund.service.ts",
+          "line": 2198,
+          "state": "IN_PROGRESS"
+        },
+        {
+          "name": "refund_completed",
+          "title": "Refund completed",
+          "detail": "Sets status COMPLETED and publishes REVEX_BLADE_REFUND_SUCCESS; email sent by notifications worker.",
+          "kind": "service",
+          "channel": "REVEX_BLADE_REFUND_SUCCESS",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/Refund/refund.service.ts",
+          "line": 2228,
+          "state": "COMPLETED"
+        }
+      ],
+      "terminal": {
+        "success": ["COMPLETED (REVEX_BLADE_REFUND_SUCCESS)"],
+        "failure": [
+          "PARTIALLY_COMPLETED (handlePartialRefund, REVEX_BLADE_REFUND_PARTIAL)",
+          "FAILED (handleFailedRefund, REVEX_BLADE_REFUND_FAILURE)",
+          "Rejected at request (400/404)",
+          "Stuck >60 min recovered by scheduledRecoveryJob (refund.service.ts:2291)"
+        ]
+      },
+      "gotchas": [
+        "If the Stripe refund succeeds but the Mongo txn fails, the card is refunded but the wallet is not debited; no compensation exists.",
+        "Recovery runs on a 120s setInterval on every worker pod, so pods can race on the same stuck refunds.",
+        "Refund debit is written COMPLETED directly and bypasses the pending-settlement pipeline."
+      ]
+    },
+    {
+      "id": "wallet_product_refund_credit",
+      "name": "Product refund credit",
+      "group": "Credits & refunds",
+      "subject": "company / location",
+      "apps": ["blade-platform"],
+      "trigger": "Product service (or wallet-subscriptions) calls POST transactions/:entityType/:entityId/refund-credit",
+      "instanceKey": "entityId:chargeId",
+      "summary": "Reverses a product charge (e.g. failed SMS, prorated subscription refund) by crediting the wallet immediately with a Refund_Credit txn.",
+      "steps": [
+        {
+          "name": "refund_credit_requested",
+          "title": "Refund credit requested",
+          "detail": "Mesh-only API receives amount, product and optional chargeId.",
+          "kind": "api",
+          "channel": "POST /transactions/:entityType/:entityId/refund-credit",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/transactions/controllers/transactions.controller.ts",
+          "line": 1689,
+          "state": "REQUESTED"
+        },
+        {
+          "name": "refund_credit_routed",
+          "title": "Routed by entity type",
+          "detail": "Service routes to company or location wallet refund credit.",
+          "kind": "service",
+          "channel": "",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/transactions/transactions.service.ts",
+          "line": 938,
+          "state": "REQUESTED"
+        },
+        {
+          "name": "refund_credit_applied_company",
+          "title": "Company wallet credited",
+          "detail": "Locks wallet, increments currentBalance, inserts Refund_Credit CREDIT COMPLETED, emits settled-charge metric.",
+          "kind": "service",
+          "channel": "companywallettransactions",
+          "repo": "revex",
+          "path": "apps/blade-platform/common/vendored-apps/billing/src/services/companyWallet.service.ts",
+          "line": 624,
+          "state": "COMPLETED"
+        },
+        {
+          "name": "refund_credit_applied_location",
+          "title": "Location wallet credited",
+          "detail": "Same as company leg on the location wallet.",
+          "kind": "service",
+          "channel": "location wallet txns",
+          "repo": "revex",
+          "path": "apps/blade-platform/common/vendored-apps/billing/src/services/locationWallet.service.ts",
+          "line": 251,
+          "state": "COMPLETED"
+        }
+      ],
+      "terminal": {
+        "success": ["202 Refund Credit success; Refund_Credit txn COMPLETED"],
+        "failure": [
+          "422 FALSE_CREDIT (amount<=0)",
+          "422 WALLET_LOCKED",
+          "Wallet not found returned as 404 body inside HTTP 202"
+        ]
+      },
+      "gotchas": [
+        "No dedupe on chargeId (only stored in meta), so a caller retry double-credits.",
+        "Missing wallet returns HTTP 202 with a 404 body; callers may treat it as success."
+      ]
+    },
+    {
+      "id": "wallet_support_adjustment",
+      "name": "Support wallet adjustment",
+      "group": "Credits & refunds",
+      "subject": "company / location",
+      "apps": ["blade-platform"],
+      "trigger": "Support portal debit/credit endpoints keyed by ticket number",
+      "instanceKey": "compositeTicketNumber = ticketNumber-entityId",
+      "summary": "Support agents debit or credit a company or location wallet against a ticket; each adjustment writes a settlement log row used by weekly/monthly reports.",
+      "steps": [
+        {
+          "name": "support_debit_requested",
+          "title": "Support debit requested",
+          "detail": "Mesh-only company wallet debit.",
+          "kind": "api",
+          "channel": "POST /support/company-wallet/debit",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/transactions/controllers/support.controller.ts",
+          "line": 60,
+          "state": "REQUESTED"
+        },
+        {
+          "name": "support_credit_requested",
+          "title": "Support credit requested",
+          "detail": "Company wallet credit guarded by CanCreditWalletGuard.",
+          "kind": "api",
+          "channel": "POST /support/company-wallet/credit",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/transactions/controllers/support.controller.ts",
+          "line": 99,
+          "state": "REQUESTED"
+        },
+        {
+          "name": "support_location_credit_requested",
+          "title": "Location credit requested",
+          "detail": "Location wallet credit guarded by CanCreditWalletGuard.",
+          "kind": "api",
+          "channel": "POST /support/location-wallet/credit",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/transactions/controllers/support.controller.ts",
+          "line": 661,
+          "state": "REQUESTED"
+        },
+        {
+          "name": "support_dedupe_checked",
+          "title": "Ticket dedupe check",
+          "detail": "Rejects a ticket already in walletcreditrefundsettlementlogs (422).",
+          "kind": "service",
+          "channel": "",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/transactions/transactions.service.ts",
+          "line": 741,
+          "state": "VALIDATED"
+        },
+        {
+          "name": "wallet_adjusted",
+          "title": "Wallet adjusted",
+          "detail": "Vendored billing service locks and debits/credits the wallet.",
+          "kind": "service",
+          "channel": "",
+          "repo": "revex",
+          "path": "apps/blade-platform/common/vendored-apps/billing/src/services/companyWallet.service.ts",
+          "line": 243,
+          "state": "ADJUSTED"
+        },
+        {
+          "name": "settlement_log_written",
+          "title": "Settlement log written",
+          "detail": "Inserts settlement log; on 11000 writes a -dup- audit row.",
+          "kind": "service",
+          "channel": "walletcreditrefundsettlementlogs",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/transactions/transactions.service.ts",
+          "line": 711,
+          "state": "LOGGED"
+        },
+        {
+          "name": "report_dispatched",
+          "title": "Refund/credit report dispatched",
+          "detail": "Publishes REVEX_BLADE_DISPATCH_REFUND_CREDIT_REPORT_EVENT; notifications worker builds CSV.",
+          "kind": "api",
+          "channel": "GET /support/company-wallet/dispatch-report",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/transactions/controllers/support.controller.ts",
+          "line": 367,
+          "state": "REPORTED"
+        },
+        {
+          "name": "report_built",
+          "title": "Report CSV emailed",
+          "detail": "Notifications service builds weekly/monthly CSV from settlement logs.",
+          "kind": "pubsub-worker",
+          "channel": "REVEX_BLADE_DISPATCH_REFUND_CREDIT_REPORT_EVENT",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/Notifications/notifications.service.ts",
+          "line": 876,
+          "state": "REPORTED"
+        }
+      ],
+      "terminal": {
+        "success": ["202, txn written and settlement log row inserted"],
+        "failure": [
+          "422 ticket already processed",
+          "404 wallet not found",
+          "400 same-day credit already logged"
+        ]
+      },
+      "gotchas": [
+        "A concurrent duplicate passes the pre-check, so the wallet is adjusted twice and only a -dup- audit row records it (transactions.service.ts:711).",
+        "Whether support debits are written PENDING or COMPLETED depends on the vendored debitWalletForSupport; not traced."
+      ]
+    },
+    {
+      "id": "wallet_subscription_renewal",
+      "name": "Wallet subscription renewal",
+      "group": "Subscriptions",
+      "subject": "company / location",
+      "apps": ["wallet-subscriptions", "billing"],
+      "trigger": "External daily cron hits POST /subscriptions/schedule",
+      "instanceKey": "subscriptionId:date (billing eventId subscriptionId_date)",
+      "summary": "Daily schedule fans out ACTIVE subscriptions due today; each creates an invoice and bills the wallet through the billing API, retrying up to 7 times before cancelling.",
+      "steps": [
+        {
+          "name": "subscription_schedule_requested",
+          "title": "Schedule triggered",
+          "detail": "Publishes wallet-subscription-schedule with today's UTC date.",
+          "kind": "cron",
+          "channel": "POST /subscriptions/schedule",
+          "repo": "revex",
+          "path": "apps/wallet-subscriptions/src/subscriptions/subscription.controller.ts",
+          "line": 89,
+          "state": "SCHEDULED"
+        },
+        {
+          "name": "subscription_schedule_run",
+          "title": "Schedule batch loop",
+          "detail": "Finds ACTIVE subs with nextExecutionAt == date and publishes PROCESS per subscription.",
+          "kind": "pubsub-worker",
+          "channel": "revex-blade-wallet-subscriptions-v2 / wallet-subscription-schedule",
+          "repo": "revex",
+          "path": "apps/wallet-subscriptions/src/subscriptions/subscription.service.ts",
+          "line": 261,
+          "state": "FANNED_OUT"
+        },
+        {
+          "name": "worker_dispatch",
+          "title": "Worker dispatch",
+          "detail": "Subscription worker routes message type to the service handler.",
+          "kind": "pubsub-worker",
+          "channel": "revex-blade-wallet-subscriptions-v2-events-sub",
+          "repo": "revex",
+          "path": "apps/wallet-subscriptions/workers/helpers/subscription-worker-helper.ts",
+          "line": 39,
+          "state": "PROCESSING"
+        },
+        {
+          "name": "subscription_process_started",
+          "title": "Process subscription",
+          "detail": "Handles wallet-subscription-process for one subscription.",
+          "kind": "pubsub-worker",
+          "channel": "wallet-subscription-process",
+          "repo": "revex",
+          "path": "apps/wallet-subscriptions/src/subscriptions/subscription.service.ts",
+          "line": 344,
+          "state": "PROCESSING"
+        },
+        {
+          "name": "subscription_invoice_created",
+          "title": "Invoice created",
+          "detail": "Creates subscriptionInvoices row PENDING, retryCount 0.",
+          "kind": "service",
+          "channel": "subscriptionInvoices",
+          "repo": "revex",
+          "path": "apps/wallet-subscriptions/src/subscriptions/subscription.service.ts",
+          "line": 371,
+          "state": "PENDING"
+        },
+        {
+          "name": "wallet_charge_requested",
+          "title": "Wallet billed",
+          "detail": "Calls billing POST /bill with eventId subscriptionId_date.",
+          "kind": "service",
+          "channel": "POST /billing/bill",
+          "repo": "revex",
+          "path": "apps/wallet-subscriptions/src/subscriptions/subscription.helper.ts",
+          "line": 50,
+          "state": "PENDING"
+        },
+        {
+          "name": "billing_bill_handled",
+          "title": "Billing charges wallet",
+          "detail": "Billing app handles the charge (joins wallet_charge flow).",
+          "kind": "api",
+          "channel": "POST /bill",
+          "repo": "revex",
+          "path": "apps/billing/src/controllers/billing.controller.ts",
+          "line": 48,
+          "state": "CHARGED"
+        },
+        {
+          "name": "invoice_marked_paid",
+          "title": "Invoice paid",
+          "detail": "Marks invoice PAID, sub ACTIVE, advances nextExecutionAt, emits invoice.paid webhook.",
+          "kind": "service",
+          "channel": "revex-reselling-subscription-events",
+          "repo": "revex",
+          "path": "apps/wallet-subscriptions/src/subscriptions/subscription.service.ts",
+          "line": 437,
+          "state": "PAID"
+        },
+        {
+          "name": "subscription_retry_attempt",
+          "title": "Retry billing",
+          "detail": "Handles wallet-subscription-retry; increments retryCount via redelivery.",
+          "kind": "pubsub-worker",
+          "channel": "wallet-subscription-retry",
+          "repo": "revex",
+          "path": "apps/wallet-subscriptions/src/subscriptions/subscription.service.ts",
+          "line": 485,
+          "state": "RETRYING"
+        },
+        {
+          "name": "subscription_canceled_max_retries",
+          "title": "Cancelled after max retries",
+          "detail": "retryCount >= 7: invoice OVERDUE, sub CANCELED, customer.subscription.updated webhook.",
+          "kind": "service",
+          "channel": "revex-reselling-subscription-events",
+          "repo": "revex",
+          "path": "apps/wallet-subscriptions/src/subscriptions/subscription.service.ts",
+          "line": 546,
+          "state": "CANCELED"
+        },
+        {
+          "name": "webhook_dispatched",
+          "title": "Webhook dispatched",
+          "detail": "Sends lifecycle webhook to configured sinks.",
+          "kind": "pubsub-worker",
+          "channel": "wallet-subscription-webhook",
+          "repo": "revex",
+          "path": "apps/wallet-subscriptions/src/subscriptions/subscription.service.ts",
+          "line": 750,
+          "state": "NOTIFIED"
+        }
+      ],
+      "terminal": {
+        "success": ["Invoice PAID with chargeId, sub ACTIVE, nextExecutionAt advanced"],
+        "failure": [
+          "Invoice OVERDUE + sub CANCELED after 7 retries",
+          "Charged but bookkeeping failed (invoice stays PENDING, acked)",
+          "Invoice create failed (nack, redelivery)"
+        ]
+      },
+      "gotchas": [
+        "Schedule query is an exact match on nextExecutionAt == today, so a missed cron day skips renewals with no catch-up (subscription.service.ts:272).",
+        "postSubscriptionBillProcess failure is ignored and acked: charge exists but invoice stays PENDING; later retries hit billing 422 ALREADY_PROCESSED and burn retries.",
+        "Retry pacing is raw Pub/Sub redelivery with no app backoff, so 7 retries may run within minutes."
+      ]
+    },
+    {
+      "id": "wallet_subscription_lifecycle",
+      "name": "Wallet subscription lifecycle",
+      "group": "Subscriptions",
+      "subject": "company / location",
+      "apps": ["wallet-subscriptions", "blade-platform"],
+      "trigger": "Reselling calls POST /subscriptions, PUT /subscriptions/:id, POST /subscriptions/cancel/:id, DELETE /subscriptions/:id",
+      "instanceKey": "subscriptionId",
+      "summary": "Create, update, cancel (immediate, period-end, prorated refund) and delete of wallet subscriptions; create triggers the first charge and prorated cancel credits the wallet back via blade refund-credit.",
+      "steps": [
+        {
+          "name": "subscription_create_requested",
+          "title": "Create requested",
+          "detail": "Mesh-only API creates a wallet subscription.",
+          "kind": "api",
+          "channel": "POST /subscriptions",
+          "repo": "revex",
+          "path": "apps/wallet-subscriptions/src/subscriptions/subscription.controller.ts",
+          "line": 30,
+          "state": "REQUESTED"
+        },
+        {
+          "name": "subscription_created",
+          "title": "Subscription created",
+          "detail": "Inserts walletSubscription INCOMPLETE and publishes first PROCESS (joins renewal) plus created webhook.",
+          "kind": "service",
+          "channel": "wallet-subscription-process",
+          "repo": "revex",
+          "path": "apps/wallet-subscriptions/src/subscriptions/subscription.service.ts",
+          "line": 91,
+          "state": "INCOMPLETE"
+        },
+        {
+          "name": "subscription_updated",
+          "title": "Subscription updated",
+          "detail": "Updates subscription and emits customer.subscription.updated.",
+          "kind": "api",
+          "channel": "PUT /subscriptions/:id",
+          "repo": "revex",
+          "path": "apps/wallet-subscriptions/src/subscriptions/subscription.service.ts",
+          "line": 206,
+          "state": "ACTIVE"
+        },
+        {
+          "name": "subscription_cancel_requested",
+          "title": "Cancel requested",
+          "detail": "Cancel API with proration type.",
+          "kind": "api",
+          "channel": "POST /subscriptions/cancel/:id",
+          "repo": "revex",
+          "path": "apps/wallet-subscriptions/src/subscriptions/subscription.controller.ts",
+          "line": 61,
+          "state": "CANCEL_REQUESTED"
+        },
+        {
+          "name": "subscription_cancel_applied",
+          "title": "Cancel applied",
+          "detail": "Applies IMMEDIATE, PERIOD_END or PRORATED_REFUND branch.",
+          "kind": "service",
+          "channel": "",
+          "repo": "revex",
+          "path": "apps/wallet-subscriptions/src/subscriptions/subscription.service.ts",
+          "line": 613,
+          "state": "CANCELED"
+        },
+        {
+          "name": "subscription_refund_published",
+          "title": "Prorated refund published",
+          "detail": "PRORATED_REFUND sets CANCELED and publishes wallet-subscription-refund.",
+          "kind": "service",
+          "channel": "wallet-subscription-refund",
+          "repo": "revex",
+          "path": "apps/wallet-subscriptions/src/subscriptions/subscription.service.ts",
+          "line": 663,
+          "state": "CANCELED"
+        },
+        {
+          "name": "subscription_refund_handled",
+          "title": "Refund event handled",
+          "detail": "Worker handles refund event and calls blade refund-credit.",
+          "kind": "pubsub-worker",
+          "channel": "wallet-subscription-refund",
+          "repo": "revex",
+          "path": "apps/wallet-subscriptions/src/subscriptions/subscription.service.ts",
+          "line": 729,
+          "state": "REFUNDING"
+        },
+        {
+          "name": "refund_credit_called",
+          "title": "Blade refund-credit called",
+          "detail": "Internal client posts to blade transactions refund-credit.",
+          "kind": "service",
+          "channel": "POST /transactions/:entityType/:entityId/refund-credit",
+          "repo": "revex",
+          "path": "apps/wallet-subscriptions/src/subscriptions/subscription.helper.ts",
+          "line": 103,
+          "state": "REFUNDING"
+        },
+        {
+          "name": "refund_credit_issued",
+          "title": "Wallet refund credited",
+          "detail": "Blade credits the wallet (wallet_product_refund_credit flow).",
+          "kind": "api",
+          "channel": "POST /transactions/:entityType/:entityId/refund-credit",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/transactions/controllers/transactions.controller.ts",
+          "line": 1689,
+          "state": "REFUNDED"
+        },
+        {
+          "name": "subscription_deleted",
+          "title": "Subscription hard-deleted",
+          "detail": "Removes the document; no event emitted.",
+          "kind": "api",
+          "channel": "DELETE /subscriptions/:id",
+          "repo": "revex",
+          "path": "apps/wallet-subscriptions/src/subscriptions/subscription.service.ts",
+          "line": 239,
+          "state": "DELETED"
+        }
+      ],
+      "terminal": {
+        "success": [
+          "Created INCOMPLETE then ACTIVE after first charge",
+          "CANCELED (immediate)",
+          "Cancel at period end (endDate set, stays ACTIVE)",
+          "CANCELED + refund credit"
+        ],
+        "failure": ["Create error swallowed, 200 empty body", "Refund failed (nack, DLQ)"]
+      },
+      "gotchas": [
+        "Prorated refund payload spreads a Mongoose doc (...subscription at subscription.service.ts:675), so entityId/amount are likely undefined and the refund may always fail.",
+        "Immediate and period-end cancels emit no webhook; EXPIRED status is never written.",
+        "Hard delete emits no event."
+      ]
+    },
+    {
+      "id": "wallet_tax_company",
+      "name": "Agency wallet tax",
+      "group": "Tax & receipts",
+      "subject": "system run -> company",
+      "apps": ["blade-platform"],
+      "trigger": "Monthly cron (external) calling POST /wallet-tax/trigger-tax-computation",
+      "instanceKey": "{forDate}-{entityType}-{entityId}-{taxSystem} (wallettaxes._id)",
+      "summary": "Monthly run batches agencies (50 per batch), prepares usage data, computes tax with Avalara or Stripe, and bills the tax charge to the agency wallet. Non-tax countries route to usage receipts.",
+      "steps": [
+        {
+          "name": "tax_run_initiated",
+          "title": "Trigger tax computation",
+          "detail": "Istio-mesh API; default period is previous calendar month.",
+          "kind": "cron",
+          "channel": "POST /wallet-tax/trigger-tax-computation",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/wallet-tax/wallet-tax.controller.ts",
+          "line": 24,
+          "state": "INITIATED"
+        },
+        {
+          "name": "tax_run_published",
+          "title": "Initiate computation",
+          "detail": "Publishes TAX_COLLECTION_INITIATION to the tax topic.",
+          "kind": "service",
+          "channel": "revex-blade-tax-collection-events",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/wallet-tax/wallet-tax.service.ts",
+          "line": 100,
+          "state": "INITIATED"
+        },
+        {
+          "name": "tax_worker_dispatch",
+          "title": "Tax worker dispatch",
+          "detail": "Switch on BladeWalletTaxSteps; no default branch.",
+          "kind": "pubsub-worker",
+          "channel": "revex-blade-tax-collection-events",
+          "repo": "revex",
+          "path": "apps/blade-platform/workers/helper/walletTaxWorker.helper.ts",
+          "line": 52,
+          "state": "RECEIVED"
+        },
+        {
+          "name": "tax_batch_processed",
+          "title": "Process agency batch",
+          "detail": "COMPANY only; batch cache gate then fan-out per agency.",
+          "kind": "pubsub-worker",
+          "channel": "TAX_COLLECTION_INITIATION",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/wallet-tax/wallet-tax.service.ts",
+          "line": 149,
+          "state": "BATCHING"
+        },
+        {
+          "name": "agencies_fanned_out",
+          "title": "Fan out taxable agencies",
+          "detail": "Pages agencies (TAX_CRON_LIMIT 50) and publishes USAGE_DATA_PREPARATION.",
+          "kind": "service",
+          "channel": "USAGE_DATA_PREPARATION",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/wallet-tax/wallet-tax.helper.ts",
+          "line": 130,
+          "state": "BATCHING"
+        },
+        {
+          "name": "usage_data_preparation",
+          "title": "Prepare usage data",
+          "detail": "Redis status gate, wallettaxes upsert; routes non-tax countries to usage receipts; skips inactive agencies.",
+          "kind": "pubsub-worker",
+          "channel": "USAGE_DATA_PREPARATION",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/wallet-tax/wallet-tax.service.ts",
+          "line": 285,
+          "state": "USAGE_DATA_PREPARATION"
+        },
+        {
+          "name": "tax_computation",
+          "title": "Compute tax",
+          "detail": "Calls Avalara or Stripe; provider errors acked.",
+          "kind": "pubsub-worker",
+          "channel": "TAX_COMPUTATION",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/wallet-tax/wallet-tax.service.ts",
+          "line": 469,
+          "state": "TAX_COMPUTATION"
+        },
+        {
+          "name": "tax_collection_and_txn_creation",
+          "title": "Collect tax",
+          "detail": "Bills tax via billing (fundCheck false) and marks wallettaxes committed.",
+          "kind": "pubsub-worker",
+          "channel": "TAX_COLLECTION_AND_TXN_CREATION",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/wallet-tax/wallet-tax.service.ts",
+          "line": 629,
+          "state": "TAX_COLLECTION_AND_TXN_CREATION"
+        },
+        {
+          "name": "tax_charge_billed",
+          "title": "Bill tax charge",
+          "detail": "billTax posts the charge with eventId = provider doc id.",
+          "kind": "service",
+          "channel": "",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/wallet-tax/wallet-tax.helper.ts",
+          "line": 219,
+          "state": "CHARGED"
+        }
+      ],
+      "terminal": {
+        "success": [
+          "tax charged (wallettaxes.committed, billingCharge set)",
+          "dry run",
+          "routed to usage receipt",
+          "skipped inactive agency",
+          "not collectable"
+        ],
+        "failure": [
+          "provider error acked (never retried)",
+          "collection failed: elastic tax-calculation-failed, nack to DLQ",
+          "invalid request / doc missing acked silently"
+        ]
+      },
+      "gotchas": [
+        "Tax worker switch has no default, so unknown types (incl. USAGE_RECEIPTS_INITIATION) throw and loop to DLQ (walletTaxWorker.helper.ts:52-145).",
+        "Avalara/Stripe errors are acked with only a log; the agency is never retried.",
+        "Cron caller is external and unverified."
+      ]
+    },
+    {
+      "id": "wallet_tax_location",
+      "name": "Sub-account wallet tax",
+      "group": "Tax & receipts",
+      "subject": "location (grouped by company registration)",
+      "apps": ["blade-platform"],
+      "trigger": "POST /initiateSubAccountTaxation (scheduler)",
+      "instanceKey": "{forDate}-LOCATION-{locationId}-{taxSystem}",
+      "summary": "Self-chaining batches of company tax registrations fan out by jurisdiction to SaaS locations. Each location runs usage prep, tax computation and billTaxForSubAccount.",
+      "steps": [
+        {
+          "name": "subaccount_tax_requested",
+          "title": "Initiate sub-account taxation",
+          "detail": "API publishes SUB_ACCOUNT_TAX_INITIATION.",
+          "kind": "api",
+          "channel": "POST /initiateSubAccountTaxation",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/wallet-tax/sub-account-tax.controller.ts",
+          "line": 57,
+          "state": "INITIATED"
+        },
+        {
+          "name": "subaccount_tax_initiated",
+          "title": "Process registration batch",
+          "detail": "Batches up to 100 registrations and self-chains by skip.",
+          "kind": "pubsub-worker",
+          "channel": "SUB_ACCOUNT_TAX_INITIATION",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/wallet-tax/sub-account-tax.service.ts",
+          "line": 129,
+          "state": "BATCHING"
+        },
+        {
+          "name": "registration_processed",
+          "title": "Fan out by jurisdiction",
+          "detail": "Resolves locations per registration jurisdiction.",
+          "kind": "service",
+          "channel": "",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/wallet-tax/sub-account-tax.service.ts",
+          "line": 1049,
+          "state": "FANNING_OUT"
+        },
+        {
+          "name": "location_published",
+          "title": "Publish per location",
+          "detail": "Publishes SUB_ACCOUNT_USAGE_DATA_PREPARATION per location.",
+          "kind": "service",
+          "channel": "SUB_ACCOUNT_USAGE_DATA_PREPARATION",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/wallet-tax/sub-account-tax.service.ts",
+          "line": 1156,
+          "state": "FANNING_OUT"
+        },
+        {
+          "name": "subaccount_usage_data_preparation",
+          "title": "Prepare location usage",
+          "detail": "Builds usage summary for the location.",
+          "kind": "pubsub-worker",
+          "channel": "SUB_ACCOUNT_USAGE_DATA_PREPARATION",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/wallet-tax/sub-account-tax.service.ts",
+          "line": 304,
+          "state": "SUB_ACCOUNT_USAGE_DATA_PREPARATION"
+        },
+        {
+          "name": "subaccount_tax_computation",
+          "title": "Compute location tax",
+          "detail": "Calls tax provider for the location.",
+          "kind": "pubsub-worker",
+          "channel": "SUB_ACCOUNT_TAX_COMPUTATION",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/wallet-tax/sub-account-tax.service.ts",
+          "line": 541,
+          "state": "SUB_ACCOUNT_TAX_COMPUTATION"
+        },
+        {
+          "name": "subaccount_tax_collection",
+          "title": "Collect location tax",
+          "detail": "billTaxForSubAccount charges the tax.",
+          "kind": "pubsub-worker",
+          "channel": "SUB_ACCOUNT_TAX_COLLECTION_AND_TXN_CREATION",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/wallet-tax/sub-account-tax.service.ts",
+          "line": 790,
+          "state": "CHARGED"
+        },
+        {
+          "name": "subaccount_tax_invoices_zip_emailed",
+          "title": "Zip and email invoices (optional)",
+          "detail": "Uploads tax invoice zip to GCS and emails it.",
+          "kind": "service",
+          "channel": "SUB_ACCOUNT_TAX_INVOICES_ZIP_UPLOAD_AND_EMAIL",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/wallet-tax/sub-account-tax.service.ts",
+          "line": 2064,
+          "state": "EMAILED"
+        }
+      ],
+      "terminal": {
+        "success": ["location tax charged", "invoices zip emailed"],
+        "failure": [
+          "thrown error: nack to DLQ",
+          "zip upload failed: 'Failed to upload tax invoices zip to Google Cloud'"
+        ]
+      },
+      "gotchas": [
+        "Fan-out count is not known up front (self-chaining registration batches).",
+        "Shares the tax worker with no default branch."
+      ]
+    },
+    {
+      "id": "wallet_tax_invoice",
+      "name": "Wallet tax invoice",
+      "group": "Tax & receipts",
+      "subject": "company / location",
+      "apps": ["blade-platform"],
+      "trigger": "globalEvents change stream on a WALLET_SALES_TAX wallet txn (model, before, after) or manual invoice endpoints",
+      "instanceKey": "transactionId",
+      "summary": "The invoice worker turns a completed WALLET_SALES_TAX txn into a bladeinvoices document and a PDF persisted to GCS. Prechecks skip wrong charge types, incomplete txns and duplicates.",
+      "steps": [
+        {
+          "name": "invoice_event_received",
+          "title": "Invoice worker receives event",
+          "detail": "Raw change-stream messages (model, no type) route to the wallet tax path.",
+          "kind": "cdc/change-stream",
+          "channel": "revex-blade-invoice-events",
+          "repo": "revex",
+          "path": "apps/blade-platform/workers/helper/invoiceWorker.helper.ts",
+          "line": 160,
+          "state": "RECEIVED"
+        },
+        {
+          "name": "invoice_prechecked",
+          "title": "Precheck wallet tax event",
+          "detail": "Skips missing after doc, wrong charge type, not completed, duplicate key, unknown model, missing entity.",
+          "kind": "pubsub-worker",
+          "channel": "",
+          "repo": "revex",
+          "path": "apps/blade-platform/workers/helper/invoiceWorker.helper.ts",
+          "line": 463,
+          "state": "VALIDATED"
+        },
+        {
+          "name": "wallet_tax_invoice_generated",
+          "title": "Generate wallet tax invoice",
+          "detail": "Builds invoice for the company or location entity.",
+          "kind": "service",
+          "channel": "",
+          "repo": "revex",
+          "path": "apps/blade-platform/workers/helper/invoiceWorker.helper.ts",
+          "line": 410,
+          "state": "GENERATING"
+        },
+        {
+          "name": "invoice_document_created",
+          "title": "Create invoice document",
+          "detail": "Writes bladeinvoices row; Redis CREATE_INVOICE_DOCUMENT=true.",
+          "kind": "service",
+          "channel": "",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/blade-invoice/receiptGenerationService.ts",
+          "line": 503,
+          "state": "DOCUMENT_CREATED"
+        },
+        {
+          "name": "invoice_pdf_generated_and_persisted",
+          "title": "Generate PDF and persist",
+          "detail": "Uploads PDF and sets invoiceStorageLink; Redis committed=true.",
+          "kind": "service",
+          "channel": "GENERATE_PDF_AND_PERSIST",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/blade-invoice/receiptGenerationService.ts",
+          "line": 610,
+          "state": "PERSISTED"
+        }
+      ],
+      "terminal": {
+        "success": ["invoice generated (invoiceStorageLink set)", "skipped: precheck reason"],
+        "failure": ["invoice_generation_failed / missing_entity_id: nack", "Stripe throttle: nack"]
+      },
+      "gotchas": ["The globalEvents change-stream producer lives outside this repo (unverified)."]
+    },
+    {
+      "id": "wallet_top_up_receipt",
+      "name": "Wallet top-up receipt",
+      "group": "Tax & receipts",
+      "subject": "system run -> company",
+      "apps": ["blade-platform"],
+      "trigger": "Scheduler calling POST /wallet-top-up-receipts/initiate",
+      "instanceKey": "runId (run) / companyId + receiptMonth",
+      "summary": "Monthly run pages companies (500 per batch) through the invoice worker and generates one top-up receipt per company from its Stripe recharge charges.",
+      "steps": [
+        {
+          "name": "receipt_run_started",
+          "title": "Initiate monthly receipts",
+          "detail": "API starts the run and publishes INITIATE_WALLET_TOP_UP_RECEIPTS.",
+          "kind": "api",
+          "channel": "POST /blade-invoice/wallet-top-up-receipts/initiate",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/blade-invoice/blade-invoice.controller.ts",
+          "line": 57,
+          "state": "STARTED"
+        },
+        {
+          "name": "receipt_run_queued",
+          "title": "Queue run",
+          "detail": "Service records run state (48h) and publishes the first page.",
+          "kind": "service",
+          "channel": "revex-blade-invoice-events",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/blade-invoice/walletTopUpReceipt.service.ts",
+          "line": 80,
+          "state": "STARTED"
+        },
+        {
+          "name": "invoice_worker_dispatch",
+          "title": "Invoice worker dispatch",
+          "detail": "Routes INITIATE_WALLET_TOP_UP_RECEIPTS and GENERATE_WALLET_TOP_UP_RECEIPT.",
+          "kind": "pubsub-worker",
+          "channel": "revex-blade-invoice-events",
+          "repo": "revex",
+          "path": "apps/blade-platform/workers/helper/invoiceWorker.helper.ts",
+          "line": 160,
+          "state": "RECEIVED"
+        },
+        {
+          "name": "receipt_page_processed",
+          "title": "Process page, fan out",
+          "detail": "Claims cursor, publishes one GENERATE per company, advances the cursor.",
+          "kind": "pubsub-worker",
+          "channel": "INITIATE_WALLET_TOP_UP_RECEIPTS",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/blade-invoice/walletTopUpReceipt.service.ts",
+          "line": 219,
+          "state": "PROCESSING"
+        },
+        {
+          "name": "company_receipt",
+          "title": "Generate company receipt",
+          "detail": "Logs outcome generated, reused or skipped:<reason>.",
+          "kind": "pubsub-worker",
+          "channel": "GENERATE_WALLET_TOP_UP_RECEIPT",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/blade-invoice/walletTopUpReceipt.service.ts",
+          "line": 453,
+          "state": "GENERATED"
+        },
+        {
+          "name": "receipt_document_created",
+          "title": "Create receipt document",
+          "detail": "Builds invoice document from recharge line items.",
+          "kind": "service",
+          "channel": "",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/blade-invoice/walletTopUpReceipt.service.ts",
+          "line": 728,
+          "state": "GENERATED"
+        }
+      ],
+      "terminal": {
+        "success": [
+          "run COMPLETED",
+          "company generated / reused",
+          "skipped: unsupported_entity_type, company_purged_or_deleted, missing_stripe_customer, no_recharge_line_items, too_many_line_items"
+        ],
+        "failure": ["thrown error: nack and redeliver"]
+      },
+      "gotchas": [
+        "COMPANY only; location recharges get no top-up receipt.",
+        "Scheduler caller is external and unverified."
+      ]
+    },
+    {
+      "id": "inactive_wallet_cleanup",
+      "name": "Inactive wallet cleanup",
+      "group": "Maintenance",
+      "subject": "system run -> company",
+      "apps": ["blade-platform"],
+      "trigger": "Cron 0 7 8 * * (cleanup, 8th monthly) and 0 7 6 * * (preview, 6th monthly), inactiveDays 30",
+      "instanceKey": "taskId (lock inactive-wallet-cleanup:days-{n})",
+      "summary": "Monthly job writes off balance and/or complimentary credits of company wallets INACTIVE for N days, then emails a CSV report. The preview branch runs two days earlier read-only.",
+      "steps": [
+        {
+          "name": "cleanup_queued",
+          "title": "Cron queues cleanup",
+          "detail": "Istio-only API publishes REVEX_BLADE_INACTIVE_WALLET_CLEANUP_TASK and returns taskId.",
+          "kind": "cron",
+          "channel": "POST /company-wallet/queue-inactive-wallet-cleanup",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/CompanyWallet/companyWallet.controller.ts",
+          "line": 348,
+          "state": "QUEUED"
+        },
+        {
+          "name": "cleanup_task_published",
+          "title": "Publish cleanup task",
+          "detail": "Service builds taskId and publishes to misc-task topic.",
+          "kind": "service",
+          "channel": "revex-blade-miscellaneous-task-events",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/CompanyWallet/companyWallet.service.ts",
+          "line": 1044,
+          "state": "QUEUED"
+        },
+        {
+          "name": "cleanup_worker_received",
+          "title": "Misc worker routes task",
+          "detail": "Always returns success:true (always acks).",
+          "kind": "pubsub-worker",
+          "channel": "revex-blade-miscellaneous-task-events",
+          "repo": "revex",
+          "path": "apps/blade-platform/workers/helper/walletMiscellaneousTaskWorker.helper.ts",
+          "line": 132,
+          "state": "RECEIVED"
+        },
+        {
+          "name": "cleanup_lock_acquired",
+          "title": "Acquire run lock",
+          "detail": "Redis SET NX EX 86400; duplicate run is skipped.",
+          "kind": "pubsub-worker",
+          "channel": "",
+          "repo": "revex",
+          "path": "apps/blade-platform/workers/handlers/inactiveWalletCleanup.handler.ts",
+          "line": 55,
+          "state": "LOCKED"
+        },
+        {
+          "name": "candidates_fetched",
+          "title": "Fetch inactive wallets",
+          "detail": "Paginated query: INACTIVE, cleanupStatus != DONE, lastDeactivatedAt < cutoff, non-zero balance/credits.",
+          "kind": "service",
+          "channel": "",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/CompanyWallet/companyWallet.service.ts",
+          "line": 1124,
+          "state": "PROCESSING"
+        },
+        {
+          "name": "company_active_checked",
+          "title": "Re-check company status",
+          "detail": "Skips if companies-api says company is active.",
+          "kind": "service",
+          "channel": "",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/CompanyWallet/companyWallet.service.ts",
+          "line": 1263,
+          "state": "VERIFIED"
+        },
+        {
+          "name": "wallet_written_off",
+          "title": "Write off wallet",
+          "detail": "Mongo txn writes CHURNED_DEBIT/CHURNED_CREDIT txns and sets cleanupStatus DONE or PARTIAL.",
+          "kind": "service",
+          "channel": "",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/CompanyWallet/companyWallet.service.ts",
+          "line": 1311,
+          "state": "DONE | PARTIAL"
+        },
+        {
+          "name": "cleanup_report_sent",
+          "title": "Email CSV report",
+          "detail": "Uploads CSV to GCS and emails the report when processed > 0; errors swallowed.",
+          "kind": "service",
+          "channel": "",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/CompanyWallet/companyWallet.service.ts",
+          "line": 1089,
+          "state": "REPORTED"
+        },
+        {
+          "name": "preview_queued",
+          "title": "Preview: cron queues preview",
+          "detail": "Preview API publishes REVEX_BLADE_INACTIVE_WALLET_PREVIEW_TASK.",
+          "kind": "cron",
+          "channel": "POST /company-wallet/generate-inactive-wallet-preview",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/CompanyWallet/companyWallet.controller.ts",
+          "line": 447,
+          "state": "QUEUED"
+        },
+        {
+          "name": "preview_processed",
+          "title": "Preview: evaluate and email",
+          "detail": "Read-only evaluation under lock inactive-wallet-preview:days-{n}, then report email.",
+          "kind": "pubsub-worker",
+          "channel": "revex-blade-miscellaneous-task-events",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/CompanyWallet/companyWallet.service.ts",
+          "line": 1693,
+          "state": "REPORTED"
+        }
+      ],
+      "terminal": {
+        "success": [
+          "completed (processed N)",
+          "completed_empty",
+          "skipped_duplicate (lock held 24h)"
+        ],
+        "failure": [
+          "run failure: lock released but message acked, next attempt next month",
+          "per-wallet failure logged and skipped"
+        ]
+      },
+      "gotchas": [
+        "Writes cleanupStatus='PARTIAL', but ECleanupStatus is attached to cleanupDate and has no PARTIAL (companyWallet.schema.ts:6-27).",
+        "Misc worker always acks, so a failed run never retries within the month.",
+        "Company wallets only; no location-wallet churn write-off exists."
+      ]
+    },
+    {
+      "id": "wallet_txn_archival",
+      "name": "Wallet txn archival",
+      "group": "Maintenance",
+      "subject": "system (collection)",
+      "apps": ["blade-platform"],
+      "trigger": "Cron 15 5 * * * calling POST /cron/archive-data-by-ttl for companywallettransactions and locationwallettransactions",
+      "instanceKey": "collectionName:startId (daily window)",
+      "summary": "Daily self-chaining job hard-deletes wallet transactions older than 95 days in batches of 5000. Each batch re-publishes the next window cursor.",
+      "steps": [
+        {
+          "name": "archival_requested",
+          "title": "Cron triggers archival",
+          "detail": "Istio-only endpoint per collection.",
+          "kind": "cron",
+          "channel": "POST /cron/archive-data-by-ttl",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/cron/cron.controller.ts",
+          "line": 18,
+          "state": "REQUESTED"
+        },
+        {
+          "name": "archival_window_computed",
+          "title": "Compute 1-day window",
+          "detail": "Builds ObjectId window ending at now - 95 days and publishes REVEX_BLADE_MONGO_ARCHIVAL_TASK.",
+          "kind": "service",
+          "channel": "revex-blade-data-archival-events",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/cron/cron.service.ts",
+          "line": 24,
+          "state": "QUEUED"
+        },
+        {
+          "name": "archival_worker_received",
+          "title": "Archival worker receives task",
+          "detail": "flowControl 5 worker routes archival task.",
+          "kind": "pubsub-worker",
+          "channel": "revex-blade-data-archival-events",
+          "repo": "revex",
+          "path": "apps/blade-platform/workers/helper/dataArchival.helper.ts",
+          "line": 25,
+          "state": "RECEIVED"
+        },
+        {
+          "name": "archival_batch",
+          "title": "Fetch, delete, re-publish",
+          "detail": "Deletes up to batchSize records and re-publishes next fromId.",
+          "kind": "pubsub-worker",
+          "channel": "revex-blade-data-archival-events",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/cron/cron.helper.ts",
+          "line": 203,
+          "state": "ARCHIVING"
+        },
+        {
+          "name": "archival_window_drained",
+          "title": "Window drained",
+          "detail": "Logs 'Archival window drained' when no more records in window.",
+          "kind": "pubsub-worker",
+          "channel": "",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/cron/cron.helper.ts",
+          "line": 257,
+          "state": "DRAINED"
+        }
+      ],
+      "terminal": {
+        "success": ["window drained"],
+        "failure": [
+          "error caught and logged: chain stops silently, message acked",
+          "unknown collection: nack"
+        ]
+      },
+      "gotchas": [
+        "deleteDataFromSource true and copyToGCS false: this is a hard delete, not an archive.",
+        "archiveRecords catches all errors, so a failure stops the chain with no retry.",
+        "REVEX_BLADE_MONGO_TTL_ARCHIVAL_TASK on the misc worker is a no-op; archive-data-by-range has no Istio guard."
+      ]
+    },
+    {
+      "id": "wallet_txn_export",
+      "name": "Wallet txn export",
+      "group": "Maintenance",
+      "subject": "company / location",
+      "apps": ["blade-platform"],
+      "trigger": "User/support init-export API, export-retry, or scheduled dispatch (export-schedules-dispatch)",
+      "instanceKey": "batchCode",
+      "summary": "V3 Export Center records a QUEUED request, then the misc worker plans periods, writes files to GCS hop by hop, zips multi-part periods and emails links. The request row is a ready-made state machine.",
+      "steps": [
+        {
+          "name": "export_requested",
+          "title": "User requests export",
+          "detail": "Agency/location init-export routes; companyId re-derived server-side.",
+          "kind": "api",
+          "channel": "POST /transactions/init-export-agency/:entityType/:companyId",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/transactions/controllers/transactions.controller.ts",
+          "line": 605,
+          "state": "QUEUED"
+        },
+        {
+          "name": "export_queued",
+          "title": "Record QUEUED and publish",
+          "detail": "Pre-records request and publishes EXPORT_TRANSACTIONS_INITIATION; publish failure marks FAILED.",
+          "kind": "service",
+          "channel": "revex-blade-miscellaneous-task-events",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/transactions/transactions.service.ts",
+          "line": 257,
+          "state": "QUEUED"
+        },
+        {
+          "name": "schedule_dispatched",
+          "title": "Scheduled dispatch",
+          "detail": "Cron claims due schedules and calls initiate; claim rolled back on failure.",
+          "kind": "cron",
+          "channel": "POST /transactions/export-schedules-dispatch",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/transactions/transactions.service.ts",
+          "line": 358,
+          "state": "QUEUED"
+        },
+        {
+          "name": "export_worker_received",
+          "title": "Misc worker runs export",
+          "detail": "Routes EXPORT_TRANSACTIONS_INITIATION to exportTransactionsV3.",
+          "kind": "pubsub-worker",
+          "channel": "revex-blade-miscellaneous-task-events",
+          "repo": "revex",
+          "path": "apps/blade-platform/workers/helper/walletMiscellaneousTaskWorker.helper.ts",
+          "line": 104,
+          "state": "RECEIVED"
+        },
+        {
+          "name": "export_v3_entry",
+          "title": "Export V3 entry",
+          "detail": "Catch marks FAILED and rethrows for redelivery.",
+          "kind": "pubsub-worker",
+          "channel": "",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/transactions/transactions.service.ts",
+          "line": 1297,
+          "state": "GENERATING"
+        },
+        {
+          "name": "export_started",
+          "title": "Begin and plan periods",
+          "detail": "Validates range and company, plans periods, sets GENERATING.",
+          "kind": "service",
+          "channel": "",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/transactions/transactions.service.ts",
+          "line": 1789,
+          "state": "GENERATING"
+        },
+        {
+          "name": "period_task_processed",
+          "title": "Process next task",
+          "detail": "Handles one period task; splits month to week to day above 100k rows.",
+          "kind": "service",
+          "channel": "",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/transactions/transactions.service.ts",
+          "line": 2217,
+          "state": "GENERATING"
+        },
+        {
+          "name": "period_file_written",
+          "title": "Write task file to GCS",
+          "detail": "Generates file (cache reuse possible) and records it.",
+          "kind": "service",
+          "channel": "",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/transactions/transactions.service.ts",
+          "line": 2449,
+          "state": "GENERATING"
+        },
+        {
+          "name": "period_zipped",
+          "title": "Zip multi-part period",
+          "detail": "Best-effort zip of multi-part periods.",
+          "kind": "service",
+          "channel": "",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/transactions/transactions.service.ts",
+          "line": 2322,
+          "state": "GENERATING"
+        },
+        {
+          "name": "export_chain_advanced",
+          "title": "Publish next task hop",
+          "detail": "Re-publishes EXPORT_TRANSACTIONS_INITIATION for the next task.",
+          "kind": "service",
+          "channel": "revex-blade-miscellaneous-task-events",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/transactions/transactions.service.ts",
+          "line": 2417,
+          "state": "GENERATING"
+        },
+        {
+          "name": "export_finalized",
+          "title": "Finalize and email",
+          "detail": "Emails links or skips (no files / no recipients); mail failure throws.",
+          "kind": "service",
+          "channel": "",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/transactions/transactions.service.ts",
+          "line": 2997,
+          "state": "READY"
+        },
+        {
+          "name": "export_ready",
+          "title": "Mark READY",
+          "detail": "Sets status READY and completedAt.",
+          "kind": "service",
+          "channel": "",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/transactions/walletTransactionExportRequest.service.ts",
+          "line": 371,
+          "state": "READY"
+        }
+      ],
+      "terminal": {
+        "success": ["READY (emailed)", "READY no files", "READY in-app only"],
+        "failure": [
+          "FAILED (markFailed: queue failure, company not found, Cannot send mail)",
+          "stuck QUEUED/GENERATING (no sweeper)"
+        ]
+      },
+      "gotchas": [
+        "FAILED can flip to READY on Pub/Sub redelivery after markFailed + rethrow; FAILED is not final until DLQ.",
+        "Invalid range returns success:false in extras but the misc worker acks it as success.",
+        "EXPORT_WALLET_TRANSACTIONS type has no producer or consumer (dead)."
+      ]
+    },
+    {
+      "id": "wallet_ledger_posting",
+      "name": "Wallet ledger posting (TigerBeetle dual write)",
+      "group": "Ledger",
+      "subject": "company",
+      "apps": ["blade-platform", "ledger"],
+      "trigger": "Committed wallet write (usage charge or company recharge credit) with a GL code",
+      "instanceKey": "chargeId (GL transfer id derived from it)",
+      "summary": "After the Mongo commit, blade builds a GL transfer and publishes wallet-ledger-event (canary-gated); the ledger worker batches messages, builds TigerBeetle transfers per ledgerId and writes them idempotently.",
+      "steps": [
+        {
+          "name": "gl_transfer_built",
+          "title": "GL transfer built from charge",
+          "detail": "Applies publish gates (company billed, not dual-billed, glCode present) before the Mongo txn.",
+          "kind": "service",
+          "channel": "",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/Charge/chargeCreation.service.ts",
+          "line": 319,
+          "state": "BUILT"
+        },
+        {
+          "name": "ledger_event_published_charge",
+          "title": "Charge GL event published",
+          "detail": "Published after commit; failure is only logged (recon dashboard shows missingInTB).",
+          "kind": "service",
+          "channel": "topic revex-blade-wallet-ledger-events",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/Charge/chargeCreation.service.ts",
+          "line": 483,
+          "state": "PUBLISHED"
+        },
+        {
+          "name": "ledger_event_published_recharge",
+          "title": "Recharge GL event published",
+          "detail": "Company recharge credit publishes GL_AGENCY_AUTO/MANUAL_RECHARGE_CODE transfer.",
+          "kind": "service",
+          "channel": "topic revex-blade-wallet-ledger-events",
+          "repo": "revex",
+          "path": "apps/blade-platform/src/WalletRecharge/rechargeTransaction.service.ts",
+          "line": 963,
+          "state": "PUBLISHED"
+        },
+        {
+          "name": "canary_gate_checked",
+          "title": "Canary allowlist gate",
+          "detail": "publishWalletLedgerEvent drops events for agencies outside the ledger canary allowlist when the gate is on.",
+          "kind": "service",
+          "channel": "type wallet-ledger-event",
+          "repo": "revex",
+          "path": "apps/blade-platform/common/services/pubsub.services.ts",
+          "line": 447,
+          "state": "PUBLISHED"
+        },
+        {
+          "name": "ledger_batch_received",
+          "title": "Ledger worker batch pulled",
+          "detail": "Worker pulls a batch and parses each message payload.",
+          "kind": "pubsub-worker",
+          "channel": "sub revex-blade-wallet-ledger-events-sub",
+          "repo": "revex",
+          "path": "apps/ledger/workers/revex-ledger-worker.ts",
+          "line": 270,
+          "state": "RECEIVED"
+        },
+        {
+          "name": "transfers_built",
+          "title": "TigerBeetle transfers built",
+          "detail": "Validates payload and builds transfers by ledgerId (UW, DEFAULT, PL, GL).",
+          "kind": "service",
+          "channel": "",
+          "repo": "revex",
+          "path": "apps/ledger/workers/revex-ledger-worker.ts",
+          "line": 202,
+          "state": "BUILT"
+        },
+        {
+          "name": "transfers_committed",
+          "title": "Transfers written to TigerBeetle",
+          "detail": "createTransfers per chunk; idempotent 'exists' errors count as duplicates.",
+          "kind": "service",
+          "channel": "TigerBeetle cluster",
+          "repo": "revex",
+          "path": "apps/ledger/workers/revex-ledger-worker.ts",
+          "line": 364,
+          "state": "POSTED"
+        }
+      ],
+      "terminal": {
+        "success": ["Transfers created in TigerBeetle", "Idempotent duplicate (already exists)"],
+        "failure": [
+          "Validation/build error acked and dropped",
+          "TB write exception -> message nacked -> DL worker (revex-blade-wallet-ledger-events-dl-sub)",
+          "Publish failure after commit (missing in TB)"
+        ]
+      },
+      "gotchas": [
+        "Validation/build errors are acked 'to prevent retry', so a malformed event is permanently missing from TigerBeetle (revex-ledger-worker.ts:320).",
+        "DEFAULT_WALLET_LEDGER_ID payloads carrying agencyId build zero transfers and are acked as success (revex-ledger-worker.ts:211).",
+        "Non-idempotent TB result errors are only logged; only thrown write exceptions mark the message failed."
+      ]
+    }
+  ]
+}

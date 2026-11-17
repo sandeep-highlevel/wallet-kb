@@ -1,0 +1,2585 @@
+{
+  "collections": [
+    {
+      "name": "companywallets",
+      "model": "CompanyWallet",
+      "database": "revex blade-platform standard DB (env MONGO_URL_BLADE_PLATFORM_STANDARD)",
+      "domain": "Wallet",
+      "purpose": "One wallet per agency (company): balance, complimentary credits, auto-recharge settings, status.",
+      "repo": "revex",
+      "path": "apps/blade-platform/src/Schema/WalletSchema/CompanyWalletSchema/companyWallet.schema.ts",
+      "line": 12,
+      "fields": [
+        { "name": "companyId", "type": "String" },
+        { "name": "currentBalance", "type": "Decimal128 (Buffer)" },
+        { "name": "complimentaryCredits", "type": "Decimal128 (Buffer)" },
+        { "name": "autoRechargeAmount", "type": "Number" },
+        { "name": "rechargeThresholdBalance", "type": "Number" },
+        { "name": "disableAutoRecharge", "type": "Boolean" },
+        { "name": "disableAutoRechargeRampup", "type": "Boolean" },
+        { "name": "status", "type": "String (EWalletStatus)" },
+        { "name": "complimentaryCreditInfo", "type": "Object" },
+        { "name": "cleanupStatus", "type": "String" }
+      ],
+      "indexes": [
+        {
+          "keys": { "companyId": 1 },
+          "options": {},
+          "declaredIn": "blade-platform companyWallet.schema.ts:35"
+        },
+        {
+          "keys": { "companyId": 1 },
+          "options": { "unique": true },
+          "declaredIn": "saas-service src/models/CompanyWallet.ts:12 (field unique) + :17 non-unique duplicate"
+        },
+        {
+          "keys": { "companyId": 1 },
+          "options": {},
+          "declaredIn": "revex-wallet-gatekeeper external/companyWallet.schema.ts:46 (mirror)"
+        }
+      ],
+      "usedBy": [
+        "blade-platform (rw)",
+        "billing (r)",
+        "revex-wallet-gatekeeper (r, mirror)",
+        "saas-service (rw)"
+      ],
+      "notes": "UNIQUENESS GAP: blade schema line 14 puts `unique: true` only in the TS type annotation, not in @Prop options, so blade declares only a NON-unique {companyId:1}. companyWallet.queries.ts:286 treats E11000 as 'wallet already exists' — relies on a unique companyId index that only saas-service declares (saas connection has autoIndex:false). Saas model also registers the same {companyId:1} key twice (unique field + non-unique schema.index) which conflicts if ever auto-built. A second legacy class exists at apps/blade-platform/src/CompanyWallet/companyWallet.schema.ts (no @Schema/collection; not registered by any module). Owner-ID enforcement plugin applied on companyId."
+    },
+    {
+      "name": "locationwallets",
+      "model": "LocationWallet",
+      "database": "revex blade-platform standard DB (env MONGO_URL_BLADE_PLATFORM_STANDARD)",
+      "domain": "Wallet",
+      "purpose": "One wallet per sub-account (location): balance, complimentary credits, recharge settings, status.",
+      "repo": "revex",
+      "path": "apps/blade-platform/src/Schema/WalletSchema/Location/schema.ts",
+      "line": 6,
+      "fields": [
+        { "name": "locationId", "type": "String" },
+        { "name": "companyId", "type": "String" },
+        { "name": "currentBalance", "type": "Decimal128 (Buffer)" },
+        { "name": "complimentaryCredits", "type": "Decimal128 (Buffer)" },
+        { "name": "autoRechargeAmount", "type": "Number" },
+        { "name": "rechargeThresholdBalance", "type": "Number" },
+        { "name": "disableAutoRecharge", "type": "Boolean" },
+        { "name": "disableManualRecharge", "type": "Boolean" },
+        { "name": "status", "type": "String (EWalletStatus)" },
+        { "name": "complimentaryCreditInfo.nextExecution", "type": "Date" }
+      ],
+      "indexes": [
+        {
+          "keys": { "locationId": 1 },
+          "options": { "unique": true },
+          "declaredIn": "blade Location/schema.ts:8 (field unique)"
+        },
+        { "keys": { "locationId": 1 }, "options": {}, "declaredIn": "blade Location/schema.ts:25" },
+        { "keys": { "companyId": 1 }, "options": {}, "declaredIn": "blade Location/schema.ts:26" },
+        {
+          "keys": { "complimentaryCreditInfo.nextExecution": -1, "_id": 1 },
+          "options": {},
+          "declaredIn": "blade Location/schema.ts:27"
+        },
+        {
+          "keys": { "locationId": 1 },
+          "options": { "unique": true },
+          "declaredIn": "saas src/models/LocationWallet.ts:19"
+        },
+        { "keys": { "companyId": 1 }, "options": {}, "declaredIn": "saas LocationWallet.ts:20" },
+        {
+          "keys": { "complimentaryCreditInfo.nextExecution": -1, "_id": 1 },
+          "options": {},
+          "declaredIn": "saas LocationWallet.ts:21"
+        },
+        {
+          "keys": { "locationId": 1 },
+          "options": {},
+          "declaredIn": "gatekeeper external/locationWallet.schema.ts:35 (mirror)"
+        },
+        {
+          "keys": { "companyId": 1 },
+          "options": {},
+          "declaredIn": "gatekeeper external/locationWallet.schema.ts:36 (mirror)"
+        }
+      ],
+      "usedBy": [
+        "blade-platform (rw)",
+        "billing (r)",
+        "revex-wallet-gatekeeper (r, mirror)",
+        "saas-service (rw)"
+      ],
+      "notes": "Blade declares {locationId:1} twice: unique via @Prop and non-unique via schema.index — same key pattern with conflicting options (autoIndex would raise IndexOptionsConflict for one). Legacy unregistered class at apps/blade-platform/src/LocationWallet/locationWallet.schema.ts."
+    },
+    {
+      "name": "developerwallets",
+      "model": "DeveloperWallet",
+      "database": "revex blade-platform standard DB (env MONGO_URL_BLADE_PLATFORM_STANDARD)",
+      "domain": "Wallet",
+      "purpose": "Prepaid wallet per marketplace developer team (developer billing).",
+      "repo": "revex",
+      "path": "apps/blade-platform/src/DeveloperWallet/developerWallet.schema.ts",
+      "line": 16,
+      "fields": [
+        { "name": "developerTeamId", "type": "String" },
+        { "name": "email", "type": "String" },
+        { "name": "currentBalance", "type": "Decimal128" },
+        { "name": "complimentaryCredits", "type": "Decimal128" },
+        { "name": "status", "type": "String (EWalletStatus)" },
+        { "name": "autoRechargeAmount", "type": "Number" },
+        { "name": "rechargeThresholdBalance", "type": "Number" },
+        { "name": "disableAutoRecharge", "type": "Boolean" },
+        { "name": "stripeCustomerId", "type": "String" },
+        { "name": "autoRechargeLockedUntil", "type": "Date" }
+      ],
+      "indexes": [
+        {
+          "keys": { "developerTeamId": 1 },
+          "options": { "unique": true },
+          "declaredIn": "developerWallet.schema.ts:67"
+        }
+      ],
+      "usedBy": [
+        "blade-platform (rw)",
+        "billing (r, DeveloperWalletMirror)",
+        "revex-wallet-gatekeeper (r, mirror)"
+      ],
+      "notes": "Billing mirror apps/billing/src/models/developerWallet.schema.ts:13 and gatekeeper mirror declare no indexes by design."
+    },
+    {
+      "name": "companywalletstatushistories",
+      "model": "CompanyWalletStatusHistory",
+      "database": "revex blade-platform standard DB (env MONGO_URL_BLADE_PLATFORM_STANDARD)",
+      "domain": "Wallet",
+      "purpose": "Audit trail of company wallet status transitions (ACTIVE/INACTIVE etc.), TTL 1 year.",
+      "repo": "revex",
+      "path": "apps/blade-platform/src/Schema/WalletStatusHistory/walletStatusHistory.schema.ts",
+      "line": 32,
+      "fields": [
+        { "name": "companyId", "type": "String" },
+        { "name": "walletId", "type": "String" },
+        { "name": "previousStatus", "type": "String" },
+        { "name": "currentStatus", "type": "String" },
+        { "name": "changedAt", "type": "Date" },
+        { "name": "changedBy", "type": "String" },
+        { "name": "metadata", "type": "Mixed" }
+      ],
+      "indexes": [
+        { "keys": { "walletId": 1 }, "options": {}, "declaredIn": "field index:true :13" },
+        { "keys": { "previousStatus": 1 }, "options": {}, "declaredIn": "field :16" },
+        { "keys": { "currentStatus": 1 }, "options": {}, "declaredIn": "field :19" },
+        { "keys": { "changedAt": 1 }, "options": {}, "declaredIn": "field :22" },
+        { "keys": { "changedBy": 1 }, "options": {}, "declaredIn": "field :25" },
+        { "keys": { "companyId": 1 }, "options": {}, "declaredIn": "field :34" },
+        { "keys": { "companyId": 1, "changedAt": -1 }, "options": {}, "declaredIn": ":51" },
+        { "keys": { "walletId": 1, "changedAt": -1 }, "options": {}, "declaredIn": ":52" },
+        { "keys": { "previousStatus": 1, "currentStatus": 1 }, "options": {}, "declaredIn": ":53" },
+        {
+          "keys": { "changedAt": 1 },
+          "options": { "expireAfterSeconds": 31536000 },
+          "declaredIn": ":57 (WALLET_STATUS_HISTORY_TTL_SECONDS)"
+        }
+      ],
+      "usedBy": ["blade-platform (rw)"],
+      "notes": "Field-level index:true on changedAt duplicates the TTL key {changedAt:1} with different options — conflict if autoIndex builds both. saas-service has a same-named model on its own DB (separate entry)."
+    },
+    {
+      "name": "locationwalletstatushistories",
+      "model": "LocationWalletStatusHistory",
+      "database": "revex blade-platform standard DB (env MONGO_URL_BLADE_PLATFORM_STANDARD)",
+      "domain": "Wallet",
+      "purpose": "Audit trail of location wallet status transitions, TTL 1 year.",
+      "repo": "revex",
+      "path": "apps/blade-platform/src/Schema/WalletStatusHistory/walletStatusHistory.schema.ts",
+      "line": 38,
+      "fields": [
+        { "name": "locationId", "type": "String" },
+        { "name": "walletId", "type": "String" },
+        { "name": "previousStatus", "type": "String" },
+        { "name": "currentStatus", "type": "String" },
+        { "name": "changedAt", "type": "Date" },
+        { "name": "changedBy", "type": "String" },
+        { "name": "metadata", "type": "Mixed" }
+      ],
+      "indexes": [
+        { "keys": { "walletId": 1 }, "options": {}, "declaredIn": "field :13" },
+        { "keys": { "previousStatus": 1 }, "options": {}, "declaredIn": "field :16" },
+        { "keys": { "currentStatus": 1 }, "options": {}, "declaredIn": "field :19" },
+        { "keys": { "changedAt": 1 }, "options": {}, "declaredIn": "field :22" },
+        { "keys": { "changedBy": 1 }, "options": {}, "declaredIn": "field :25" },
+        { "keys": { "locationId": 1 }, "options": {}, "declaredIn": "field :40" },
+        { "keys": { "locationId": 1, "changedAt": -1 }, "options": {}, "declaredIn": ":62" },
+        { "keys": { "walletId": 1, "changedAt": -1 }, "options": {}, "declaredIn": ":63" },
+        { "keys": { "previousStatus": 1, "currentStatus": 1 }, "options": {}, "declaredIn": ":64" },
+        {
+          "keys": { "changedAt": 1 },
+          "options": { "expireAfterSeconds": 31536000 },
+          "declaredIn": ":68"
+        }
+      ],
+      "usedBy": ["blade-platform (rw)"],
+      "notes": "Same {changedAt:1} field-index vs TTL conflict as company history."
+    },
+    {
+      "name": "companywalletstatushistories",
+      "model": "CompanyWalletStatusHistory",
+      "database": "saas main DB (env SAAS_MONGO_URL, default mongoose connection)",
+      "domain": "Wallet",
+      "purpose": "Legacy saas-service copy of company wallet status history (on saas main DB).",
+      "repo": "saas",
+      "path": "src/models/CompanyWalletStatusHistory.ts",
+      "line": 15,
+      "fields": [
+        { "name": "companyId", "type": "String" },
+        { "name": "walletId", "type": "String" },
+        { "name": "previousStatus", "type": "String" },
+        { "name": "currentStatus", "type": "String" },
+        { "name": "changedAt", "type": "Date" },
+        { "name": "changedBy", "type": "String" }
+      ],
+      "indexes": [
+        { "keys": { "companyId": 1 }, "options": {}, "declaredIn": "field :17" },
+        { "keys": { "walletId": 1 }, "options": {}, "declaredIn": "field :18" },
+        { "keys": { "previousStatus": 1 }, "options": {}, "declaredIn": "field" },
+        { "keys": { "currentStatus": 1 }, "options": {}, "declaredIn": "field" },
+        { "keys": { "changedAt": 1 }, "options": {}, "declaredIn": "field :31" },
+        { "keys": { "changedBy": 1 }, "options": {}, "declaredIn": "field :32" },
+        { "keys": { "companyId": 1, "changedAt": -1 }, "options": {}, "declaredIn": ":40" },
+        { "keys": { "walletId": 1, "changedAt": -1 }, "options": {}, "declaredIn": ":41" },
+        { "keys": { "previousStatus": 1, "currentStatus": 1 }, "options": {}, "declaredIn": ":42" },
+        {
+          "keys": { "changedAt": 1 },
+          "options": { "expireAfterSeconds": 31536000 },
+          "declaredIn": ":45"
+        }
+      ],
+      "usedBy": ["saas-service (rw, rough)"],
+      "notes": "Same collection name as blade's but bound to default mongoose connection (SAAS_MONGO_URL), autoIndex:false (src/db.ts)."
+    },
+    {
+      "name": "locationwalletstatushistories",
+      "model": "LocationWalletStatusHistory",
+      "database": "saas main DB (env SAAS_MONGO_URL, default mongoose connection)",
+      "domain": "Wallet",
+      "purpose": "Legacy saas-service copy of location wallet status history (on saas main DB).",
+      "repo": "saas",
+      "path": "src/models/LocationWalletStatusHistory.ts",
+      "line": 15,
+      "fields": [
+        { "name": "locationId", "type": "String" },
+        { "name": "walletId", "type": "String" },
+        { "name": "previousStatus", "type": "String" },
+        { "name": "currentStatus", "type": "String" },
+        { "name": "changedAt", "type": "Date" },
+        { "name": "changedBy", "type": "String" }
+      ],
+      "indexes": [
+        { "keys": { "locationId": 1 }, "options": {}, "declaredIn": "field :17" },
+        { "keys": { "walletId": 1 }, "options": {}, "declaredIn": "field :18" },
+        { "keys": { "previousStatus": 1 }, "options": {}, "declaredIn": "field" },
+        { "keys": { "currentStatus": 1 }, "options": {}, "declaredIn": "field" },
+        { "keys": { "changedAt": 1 }, "options": {}, "declaredIn": "field :31" },
+        { "keys": { "changedBy": 1 }, "options": {}, "declaredIn": "field :32" },
+        { "keys": { "locationId": 1, "changedAt": -1 }, "options": {}, "declaredIn": ":40" },
+        { "keys": { "walletId": 1, "changedAt": -1 }, "options": {}, "declaredIn": ":41" },
+        { "keys": { "previousStatus": 1, "currentStatus": 1 }, "options": {}, "declaredIn": ":42" },
+        {
+          "keys": { "changedAt": 1 },
+          "options": { "expireAfterSeconds": 31536000 },
+          "declaredIn": ":48"
+        }
+      ],
+      "usedBy": ["saas-service (rw, rough)"],
+      "notes": "Default mongoose connection, autoIndex:false."
+    },
+    {
+      "name": "dailycreditlogs",
+      "model": "DailyCreditLog",
+      "database": "revex blade-platform standard DB (env MONGO_URL_BLADE_PLATFORM_STANDARD)",
+      "domain": "Wallet",
+      "purpose": "Log of credits (complimentary/campaign/refund credits) added to wallets per day.",
+      "repo": "revex",
+      "path": "apps/blade-platform/common/schema/dailyCreditLog.schema.ts",
+      "line": 5,
+      "fields": [
+        { "name": "companyId", "type": "String" },
+        { "name": "locationId", "type": "String" },
+        { "name": "addedBy", "type": "String" },
+        { "name": "relationshipNumber", "type": "String" },
+        { "name": "transaction", "type": "ObjectId" },
+        { "name": "creditType", "type": "String" },
+        { "name": "subType", "type": "String" },
+        { "name": "amount", "type": "Decimal128" },
+        { "name": "date", "type": "Date" },
+        { "name": "campaign", "type": "String" }
+      ],
+      "indexes": [
+        { "keys": { "date": 1 }, "options": {}, "declaredIn": "field index:true :29" },
+        { "keys": { "date": 1 }, "options": {}, "declaredIn": ":49 (duplicate of field index)" },
+        {
+          "keys": { "companyId": 1, "campaign": 1 },
+          "options": { "sparse": true },
+          "declaredIn": ":50"
+        },
+        {
+          "keys": { "companyId": 1, "creditType": 1, "subType": 1 },
+          "options": { "sparse": true },
+          "declaredIn": ":52"
+        },
+        {
+          "keys": { "companyId": 1, "locationId": 1 },
+          "options": { "sparse": true },
+          "declaredIn": ":56"
+        }
+      ],
+      "usedBy": ["blade-platform (rw)"],
+      "notes": ""
+    },
+    {
+      "name": "aiopportunitiescreditledgers",
+      "model": "AiOpportunitiesCreditLedger",
+      "database": "revex blade-platform standard DB (env MONGO_URL_BLADE_PLATFORM_STANDARD)",
+      "domain": "Wallet",
+      "purpose": "Per-agency ledger capping AI-opportunities reward credits; _id = companyId for atomic cap reservation.",
+      "repo": "revex",
+      "path": "apps/blade-platform/src/AiOpportunitiesCredit/ai-opportunities-credit.ledger.schema.ts",
+      "line": 12,
+      "fields": [
+        { "name": "_id", "type": "String (companyId)" },
+        { "name": "totalGrantedCents", "type": "Number" },
+        { "name": "grantedRewardKeys", "type": "[String]" },
+        { "name": "createdAt", "type": "Date" },
+        { "name": "updatedAt", "type": "Date" }
+      ],
+      "indexes": [],
+      "usedBy": ["blade-platform (rw)"],
+      "notes": "Uniqueness via _id only (by design, comment line 7-10). grantedRewardKeys de-dupe relies on atomic findOneAndUpdate, not an index."
+    },
+    {
+      "name": "locationwallets_archives",
+      "model": "locationwallets_archive",
+      "database": "revex blade-platform standard DB (saas env MONGO_URL_BLADE_PLATFORM_STANDARD)",
+      "domain": "Wallet",
+      "purpose": "Archive of deleted/purged location wallets (saas-service archival).",
+      "repo": "saas",
+      "path": "src/models/ArchiveCollections.ts",
+      "line": 8,
+      "fields": [
+        { "name": "companyId", "type": "String" },
+        { "name": "locationId", "type": "String" },
+        { "name": "walletId", "type": "ObjectId" },
+        { "name": "stripeCustomer", "type": "String" },
+        { "name": "rechargeThresholdBalance", "type": "Number" },
+        { "name": "currentBalance", "type": "Decimal128 (WalletSchema)" },
+        { "name": "complimentaryCredits", "type": "Decimal128 (WalletSchema)" }
+      ],
+      "indexes": [],
+      "usedBy": ["saas-service (w)"],
+      "notes": "Collection name derived by mongoose pluralization of model name 'locationwallets_archive' (no explicit collection) -> 'locationwallets_archives' (verify in prod). Base wallet fields come from WalletSchema (src/models/Wallet.ts:42)."
+    },
+    {
+      "name": "companywallettransactions",
+      "model": "CompanyWalletTransaction",
+      "database": "revex blade-platform standard DB (env MONGO_URL_BLADE_PLATFORM_STANDARD)",
+      "domain": "Transactions",
+      "purpose": "Ledger of agency wallet debits/credits (usage charges, recharges, refunds) with pending->completed settlement.",
+      "repo": "revex",
+      "path": "apps/billing/src/models/companyWalletTransaction.schema.ts",
+      "line": 14,
+      "fields": [
+        { "name": "companyId", "type": "String" },
+        { "name": "locationId", "type": "String" },
+        { "name": "walletId", "type": "ObjectId" },
+        { "name": "chargeId", "type": "String" },
+        { "name": "chargeType", "type": "String" },
+        { "name": "transactionType", "type": "String (DEBIT|CREDIT)" },
+        { "name": "transactionAmount", "type": "Decimal128" },
+        { "name": "walletBalance", "type": "Decimal128" },
+        { "name": "state", "type": "String (PENDING|COMPLETED)" },
+        { "name": "settlementTime", "type": "Date" },
+        { "name": "charge", "type": "Object" }
+      ],
+      "indexes": [
+        {
+          "keys": { "companyId": 1, "chargeType": 1, "settlementTime": -1 },
+          "options": {},
+          "declaredIn": "billing :94 (also blade vendored copy :94)"
+        },
+        {
+          "keys": { "companyId": 1, "locationId": 1, "chargeType": 1, "settlementTime": -1 },
+          "options": {},
+          "declaredIn": "billing :99"
+        },
+        {
+          "keys": { "companyId": 1, "settlementTime": -1 },
+          "options": {},
+          "declaredIn": "billing :105"
+        },
+        {
+          "keys": { "companyId": 1, "chargeType": 1, "settlementTime": -1 },
+          "options": {},
+          "declaredIn": "saas CompanyWalletTransaction.ts:36"
+        },
+        {
+          "keys": { "companyId": 1, "locationId": 1, "chargeType": 1, "settlementTime": -1 },
+          "options": {},
+          "declaredIn": "saas :37"
+        },
+        {
+          "keys": { "companyId": 1, "settlementTime": -1 },
+          "options": {},
+          "declaredIn": "saas :38"
+        },
+        { "keys": { "settlementTime": -1 }, "options": {}, "declaredIn": "saas :40 (saas only)" }
+      ],
+      "usedBy": ["blade-platform (rw)", "billing (rw)", "saas-service (rw)"],
+      "notes": "No unique index on chargeId (developer equivalent has unique {developerTeamId,chargeId}). Blade registers the schema from common/vendored-apps/billing/src/models/companyWalletTransaction.schema.ts (same indexes). Blade also reads it natively via connection.db.collection('companywallettransactions') in src/transactions/transactions.queries.ts."
+    },
+    {
+      "name": "companywallettransactionsTB",
+      "model": "CompanyWalletTransactionTB",
+      "database": "revex blade-platform standard DB (env MONGO_URL_BLADE_PLATFORM_STANDARD)",
+      "domain": "Transactions",
+      "purpose": "TigerBeetle-shadow copy of company wallet transactions (carries agencyTransferDId).",
+      "repo": "revex",
+      "path": "apps/billing/src/models/companyWalletTransaction.schema.ts",
+      "line": 120,
+      "fields": [
+        { "name": "companyId", "type": "String" },
+        { "name": "agencyTransferDId", "type": "String" },
+        { "name": "locationId", "type": "String" },
+        { "name": "walletId", "type": "ObjectId" },
+        { "name": "chargeId", "type": "String" },
+        { "name": "chargeType", "type": "String" },
+        { "name": "transactionType", "type": "String" },
+        { "name": "transactionAmount", "type": "Decimal128" },
+        { "name": "settlementTime", "type": "Date" }
+      ],
+      "indexes": [
+        {
+          "keys": { "companyId": 1, "chargeType": 1, "settlementTime": -1 },
+          "options": {},
+          "declaredIn": ":201"
+        },
+        {
+          "keys": { "companyId": 1, "locationId": 1, "chargeType": 1, "settlementTime": -1 },
+          "options": {},
+          "declaredIn": ":206"
+        },
+        { "keys": { "companyId": 1, "settlementTime": -1 }, "options": {}, "declaredIn": ":212" }
+      ],
+      "usedBy": ["billing (rw)"],
+      "notes": ""
+    },
+    {
+      "name": "locationwallettransactions",
+      "model": "LocationWalletTransaction",
+      "database": "revex blade-platform standard DB (env MONGO_URL_BLADE_PLATFORM_STANDARD)",
+      "domain": "Transactions",
+      "purpose": "Ledger of sub-account (location) wallet debits/credits.",
+      "repo": "revex",
+      "path": "apps/billing/src/models/locationWalletTransaction.schema.ts",
+      "line": 11,
+      "fields": [
+        { "name": "locationId", "type": "String" },
+        { "name": "companyId", "type": "String" },
+        { "name": "walletId", "type": "ObjectId" },
+        { "name": "accountUnderGHL", "type": "Boolean" },
+        { "name": "chargeId", "type": "String" },
+        { "name": "chargeType", "type": "String" },
+        { "name": "transactionType", "type": "String" },
+        { "name": "transactionAmount", "type": "Decimal128" },
+        { "name": "state", "type": "String" },
+        { "name": "settlementTime", "type": "Date" }
+      ],
+      "indexes": [
+        {
+          "keys": { "locationId": 1, "settlementTime": -1 },
+          "options": {},
+          "declaredIn": "billing :64 (blade vendored identical)"
+        },
+        {
+          "keys": { "locationId": 1, "chargeType": 1, "settlementTime": -1 },
+          "options": {},
+          "declaredIn": "billing :65"
+        },
+        {
+          "keys": { "locationId": 1, "settlementTime": -1 },
+          "options": {},
+          "declaredIn": "saas LocationWalletTransaction.ts:24"
+        },
+        {
+          "keys": { "locationId": 1, "chargeType": 1, "settlementTime": -1 },
+          "options": {},
+          "declaredIn": "saas :25"
+        }
+      ],
+      "usedBy": ["blade-platform (rw)", "billing (rw)", "saas-service (rw)"],
+      "notes": "No unique index on chargeId."
+    },
+    {
+      "name": "developerwallettransactions",
+      "model": "DeveloperWalletTransaction",
+      "database": "revex blade-platform standard DB (env MONGO_URL_BLADE_PLATFORM_STANDARD)",
+      "domain": "Transactions",
+      "purpose": "Ledger of developer-team wallet debits/credits.",
+      "repo": "revex",
+      "path": "apps/blade-platform/src/DeveloperWallet/developerWalletTransaction.schema.ts",
+      "line": 16,
+      "fields": [
+        { "name": "developerTeamId", "type": "String" },
+        { "name": "walletId", "type": "ObjectId" },
+        { "name": "chargeId", "type": "String" },
+        { "name": "chargeType", "type": "String" },
+        { "name": "transactionType", "type": "String" },
+        { "name": "transactionAmount", "type": "Decimal128" },
+        { "name": "state", "type": "String" },
+        { "name": "settlementTime", "type": "Date" },
+        { "name": "createdAt", "type": "Date" }
+      ],
+      "indexes": [
+        { "keys": { "developerTeamId": 1, "createdAt": -1 }, "options": {}, "declaredIn": ":34" },
+        {
+          "keys": { "developerTeamId": 1, "chargeType": 1, "createdAt": -1 },
+          "options": {},
+          "declaredIn": ":38"
+        },
+        {
+          "keys": { "developerTeamId": 1, "settlementTime": -1 },
+          "options": {},
+          "declaredIn": ":44"
+        },
+        {
+          "keys": { "developerTeamId": 1, "chargeId": 1 },
+          "options": {
+            "unique": true,
+            "partialFilterExpression": { "chargeId": { "$type": "string" } }
+          },
+          "declaredIn": ":54"
+        }
+      ],
+      "usedBy": ["blade-platform (rw)"],
+      "notes": "Recharge webhook path relies on this unique index for E11000 race handling (rechargeTransaction.service.ts:1901)."
+    },
+    {
+      "name": "walletCreditRefundSettlementLogs",
+      "model": "WalletCreditRefundSettlementLog",
+      "database": "revex blade-platform standard DB (env MONGO_URL_BLADE_PLATFORM_STANDARD)",
+      "domain": "Transactions",
+      "purpose": "Audit log of manual credit/refund/settlement wallet operations keyed by support ticket.",
+      "repo": "revex",
+      "path": "apps/blade-platform/src/transactions/walletCreditRefundSettlementLog.schema.ts",
+      "line": 7,
+      "fields": [
+        { "name": "entityId", "type": "String" },
+        { "name": "entityType", "type": "String" },
+        { "name": "relationshipNumber", "type": "String" },
+        { "name": "product", "type": "String" },
+        { "name": "transactionType", "type": "String" },
+        { "name": "chargeType", "type": "String" },
+        { "name": "amount", "type": "Decimal128" },
+        { "name": "transactionId", "type": "ObjectId" },
+        { "name": "settlementTime", "type": "Date" },
+        { "name": "ticketNumber", "type": "String" },
+        { "name": "performedBy", "type": "String" }
+      ],
+      "indexes": [
+        { "keys": { "ticketNumber": 1 }, "options": { "unique": true }, "declaredIn": ":57" },
+        {
+          "keys": { "chargeType": 1, "transactionType": 1, "settlementTime": -1 },
+          "options": {},
+          "declaredIn": ":66"
+        },
+        { "keys": { "chargeType": 1, "settlementTime": -1 }, "options": {}, "declaredIn": ":72" }
+      ],
+      "usedBy": ["blade-platform (rw)"],
+      "notes": "transactions.service.ts:720 retries with a dedup suffix on E11000 from the ticketNumber unique index."
+    },
+    {
+      "name": "wallet-transactions-export-requests",
+      "model": "WalletTransactionExportRequest",
+      "database": "revex blade-platform standard DB (env MONGO_URL_BLADE_PLATFORM_STANDARD)",
+      "domain": "Transactions",
+      "purpose": "Export Center requests: wallet-transaction CSV export batches, periods and produced files.",
+      "repo": "revex",
+      "path": "apps/blade-platform/src/transactions/walletTransactionExportRequest.schema.ts",
+      "line": 120,
+      "fields": [
+        { "name": "batchCode", "type": "String" },
+        { "name": "name", "type": "String" },
+        { "name": "nameLower", "type": "String" },
+        { "name": "entityType", "type": "String" },
+        { "name": "entityId", "type": "String" },
+        { "name": "companyId", "type": "String" },
+        { "name": "origin", "type": "String" },
+        { "name": "rangeFrom", "type": "Date" },
+        { "name": "rangeTo", "type": "Date" },
+        { "name": "status", "type": "String" },
+        { "name": "completedAt", "type": "Date" }
+      ],
+      "indexes": [
+        { "keys": { "batchCode": 1 }, "options": { "unique": true }, "declaredIn": "field :127" },
+        {
+          "keys": { "entityId": 1, "entityType": 1, "origin": 1, "createdAt": -1 },
+          "options": {},
+          "declaredIn": ":263"
+        },
+        {
+          "keys": { "entityType": 1, "entityId": 1, "origin": 1, "nameLower": 1 },
+          "options": {
+            "unique": true,
+            "partialFilterExpression": { "nameLower": { "$type": "string" } }
+          },
+          "declaredIn": ":280"
+        }
+      ],
+      "usedBy": ["blade-platform (rw)"],
+      "notes": "strict:false schema."
+    },
+    {
+      "name": "wallet-transactions-export-files",
+      "model": "WalletTransactionExportFile",
+      "database": "revex blade-platform standard DB (env MONGO_URL_BLADE_PLATFORM_STANDARD)",
+      "domain": "Transactions",
+      "purpose": "Cache of generated per-period export files (GCS paths) for reuse; partial periods expire.",
+      "repo": "revex",
+      "path": "apps/blade-platform/src/transactions/walletTransactionExportFile.schema.ts",
+      "line": 17,
+      "fields": [
+        { "name": "entityType", "type": "String" },
+        { "name": "entityId", "type": "String" },
+        { "name": "periodKey", "type": "String" },
+        { "name": "granularity", "type": "String" },
+        { "name": "filterHash", "type": "String" },
+        { "name": "filePath", "type": "String" },
+        { "name": "recordCount", "type": "Number" },
+        { "name": "isPartial", "type": "Boolean" },
+        { "name": "rangeFrom", "type": "Date" },
+        { "name": "expiresAt", "type": "Date" }
+      ],
+      "indexes": [
+        {
+          "keys": { "entityType": 1, "entityId": 1, "periodKey": 1, "filterHash": 1 },
+          "options": { "unique": true, "partialFilterExpression": { "isPartial": false } },
+          "declaredIn": ":72"
+        },
+        { "keys": { "isPartial": 1, "expiresAt": 1 }, "options": {}, "declaredIn": ":86" }
+      ],
+      "usedBy": ["blade-platform (rw)"],
+      "notes": "expiresAt is NOT a TTL index; cleanup is application-driven."
+    },
+    {
+      "name": "wallet-transactions-export-schedules",
+      "model": "WalletTransactionExportSchedule",
+      "database": "revex blade-platform standard DB (env MONGO_URL_BLADE_PLATFORM_STANDARD)",
+      "domain": "Transactions",
+      "purpose": "Recurring wallet-transaction export schedules polled by cron.",
+      "repo": "revex",
+      "path": "apps/blade-platform/src/transactions/walletTransactionExportSchedule.schema.ts",
+      "line": 20,
+      "fields": [
+        { "name": "name", "type": "String" },
+        { "name": "nameLower", "type": "String" },
+        { "name": "configHash", "type": "String" },
+        { "name": "entityType", "type": "String" },
+        { "name": "entityId", "type": "String" },
+        { "name": "companyId", "type": "String" },
+        { "name": "origin", "type": "String" },
+        { "name": "frequency", "type": "String" },
+        { "name": "status", "type": "String" },
+        { "name": "nextRunAt", "type": "Date" },
+        { "name": "deliveryEmails", "type": "[String]" }
+      ],
+      "indexes": [
+        { "keys": { "status": 1, "nextRunAt": 1 }, "options": {}, "declaredIn": ":141" },
+        {
+          "keys": { "entityId": 1, "entityType": 1, "origin": 1, "createdAt": -1 },
+          "options": {},
+          "declaredIn": ":147"
+        },
+        {
+          "keys": { "entityType": 1, "entityId": 1, "origin": 1, "nameLower": 1 },
+          "options": {
+            "unique": true,
+            "partialFilterExpression": { "nameLower": { "$type": "string" } }
+          },
+          "declaredIn": ":164"
+        },
+        {
+          "keys": { "entityType": 1, "entityId": 1, "origin": 1, "configHash": 1 },
+          "options": {
+            "unique": true,
+            "partialFilterExpression": { "configHash": { "$type": "string" } }
+          },
+          "declaredIn": ":176"
+        }
+      ],
+      "usedBy": ["blade-platform (rw)"],
+      "notes": ""
+    },
+    {
+      "name": "transaction-anomalies",
+      "model": "TransactionAnomaly",
+      "database": "revex blade-platform standard DB (env MONGO_URL_BLADE_PLATFORM_STANDARD)",
+      "domain": "Transactions",
+      "purpose": "History of detected wallet transaction anomalies (spikes) that fired alerts.",
+      "repo": "revex",
+      "path": "apps/blade-platform/src/Analytics/schema/transaction-anomaly.schema.ts",
+      "line": 14,
+      "fields": [
+        { "name": "entityId", "type": "String" },
+        { "name": "entityType", "type": "String" },
+        { "name": "transactionType", "type": "String" },
+        { "name": "anomalyTypes", "type": "[String]" },
+        { "name": "detectedAt", "type": "Date" },
+        { "name": "eventType", "type": "String" }
+      ],
+      "indexes": [
+        { "keys": { "detectedAt": -1 }, "options": {}, "declaredIn": ":68" },
+        {
+          "keys": { "entityType": 1, "entityId": 1, "detectedAt": -1 },
+          "options": {},
+          "declaredIn": ":69"
+        },
+        { "keys": { "transactionType": 1, "detectedAt": -1 }, "options": {}, "declaredIn": ":70" }
+      ],
+      "usedBy": ["blade-platform (rw)"],
+      "notes": "Comment line 67: indexes are Liquibase-managed (autoIndex off in deployed envs); declarations are documentation only. Liquibase changelogs are NOT in this repo."
+    },
+    {
+      "name": "refunds",
+      "model": "Refund",
+      "database": "revex blade-platform standard DB (env MONGO_URL_BLADE_PLATFORM_STANDARD)",
+      "domain": "Transactions",
+      "purpose": "Agency wallet refund requests processed by support (ticket ref, amounts, history).",
+      "repo": "revex",
+      "path": "apps/blade-platform/src/Refund/refund.schema.ts",
+      "line": 6,
+      "fields": [
+        { "name": "companyId", "type": "String" },
+        { "name": "ticketRef", "type": "String" },
+        { "name": "totalRefundAmount", "type": "Decimal128" },
+        { "name": "processedAmount", "type": "Decimal128" },
+        { "name": "agentEmail", "type": "String" },
+        { "name": "status", "type": "String (RefundStatus)" },
+        { "name": "refundHistory", "type": "Array" },
+        { "name": "completedAt", "type": "Date" },
+        { "name": "failureReason", "type": "String" }
+      ],
+      "indexes": [],
+      "usedBy": ["blade-platform (rw)"],
+      "notes": "No explicit collection: name from mongoose pluralization of model 'Refund'. No indexes declared (queries by companyId/ticketRef unindexed in code)."
+    },
+    {
+      "name": "walletrefunds",
+      "model": "WalletRefund",
+      "database": "saas main DB (env SAAS_MONGO_URL, default mongoose connection)",
+      "domain": "Transactions",
+      "purpose": "saas-service record of wallet refunds per entity.",
+      "repo": "saas",
+      "path": "src/models/WalletRefund.ts",
+      "line": 18,
+      "fields": [
+        { "name": "entityType", "type": "String" },
+        { "name": "entityId", "type": "String" },
+        { "name": "charge", "type": "Mixed" },
+        { "name": "amount", "type": "Number" },
+        { "name": "metaData", "type": "Mixed" },
+        { "name": "description", "type": "String" },
+        { "name": "refundTransaction", "type": "String" }
+      ],
+      "indexes": [{ "keys": { "entityId": 1 }, "options": {}, "declaredIn": ":33" }],
+      "usedBy": ["saas-service (rw)"],
+      "notes": "Pluralized from model 'WalletRefund'."
+    },
+    {
+      "name": "locationwalletrefunds",
+      "model": "LocationWalletRefund",
+      "database": "saas main DB (env SAAS_MONGO_URL, default mongoose connection)",
+      "domain": "Transactions",
+      "purpose": "Legacy saas-service location wallet refunds.",
+      "repo": "saas",
+      "path": "src/models/LocationWalletRefund.ts",
+      "line": 13,
+      "fields": [
+        { "name": "locationId", "type": "String" },
+        { "name": "charge", "type": "Mixed" },
+        { "name": "amount", "type": "Number" },
+        { "name": "metaData", "type": "Mixed" },
+        { "name": "description", "type": "String" },
+        { "name": "refundTransaction", "type": "ObjectId" }
+      ],
+      "indexes": [{ "keys": { "locationId": 1 }, "options": {}, "declaredIn": ":24" }],
+      "usedBy": ["saas-service (rw, rough)"],
+      "notes": ""
+    },
+    {
+      "name": "locationwallettransactions_archivals",
+      "model": "locationwallettransactions_archival",
+      "database": "revex blade-platform standard DB (saas env MONGO_URL_BLADE_PLATFORM_STANDARD)",
+      "domain": "Transactions",
+      "purpose": "Archive of location wallet transactions for purged locations.",
+      "repo": "saas",
+      "path": "src/models/ArchiveCollections.ts",
+      "line": 21,
+      "fields": [
+        { "name": "locationId", "type": "String" },
+        { "name": "companyId", "type": "String" },
+        { "name": "walletId", "type": "ObjectId" },
+        { "name": "chargeType", "type": "String (WalletTransactionSchema)" },
+        { "name": "transactionType", "type": "String (WalletTransactionSchema)" },
+        { "name": "transactionAmount", "type": "Decimal128 (WalletTransactionSchema)" },
+        { "name": "settlementTime", "type": "Date (WalletTransactionSchema)" }
+      ],
+      "indexes": [],
+      "usedBy": ["saas-service (w)"],
+      "notes": "Name derived via mongoose pluralization of 'locationwallettransactions_archival' -> 'locationwallettransactions_archivals' (no explicit collection; verify in prod). Model at ArchiveCollections.ts:32."
+    },
+    {
+      "name": "archivedpendingtransactions",
+      "model": "ArchivedPendingTransaction",
+      "database": "saas main DB (env SAAS_MONGO_URL, default mongoose connection)",
+      "domain": "Transactions",
+      "purpose": "Archive of pending wallet transactions removed during cleanup.",
+      "repo": "saas",
+      "path": "src/models/ArchivedPendingTransaction.ts",
+      "line": 13,
+      "fields": [
+        { "name": "transactionAmount", "type": "Decimal128" },
+        { "name": "entityType", "type": "String" },
+        { "name": "entityId", "type": "String" },
+        { "name": "transactionId", "type": "String" },
+        { "name": "transactionCreatedAt", "type": "Date" }
+      ],
+      "indexes": [],
+      "usedBy": ["saas-service (rw, rough)"],
+      "notes": ""
+    },
+    {
+      "name": "transactionsummaries",
+      "model": "TransactionSummary",
+      "database": "saas main DB (env SAAS_MONGO_URL, default mongoose connection)",
+      "domain": "Transactions",
+      "purpose": "Daily per-entity transaction summaries (per chargeType aggregates).",
+      "repo": "saas",
+      "path": "src/models/TransactionSummary.ts",
+      "line": 62,
+      "fields": [
+        { "name": "entityId", "type": "String" },
+        { "name": "entityType", "type": "String" },
+        { "name": "forDate", "type": "Date" },
+        { "name": "summaries", "type": "Object" },
+        { "name": "transactionStats", "type": "Object" },
+        { "name": "isDeleted", "type": "Boolean" },
+        { "name": "syncedOn", "type": "Date" }
+      ],
+      "indexes": [
+        {
+          "keys": { "entityId entityType forDate": 1 },
+          "options": { "unique": 1 },
+          "declaredIn": ":64 — declared as string 'entityId entityType forDate' (malformed)"
+        }
+      ],
+      "usedBy": ["saas-service (rw)"],
+      "notes": "MALFORMED INDEX: schema.index('entityId entityType forDate', {unique:1}) passes a space-separated string, which the driver treats as a single literal field name — intended compound unique {entityId,entityType,forDate} is not what would be built. Code relies on per-(entity, day) uniqueness. autoIndex:false on this connection."
+    },
+    {
+      "name": "transactionsummaryidkeepers",
+      "model": "TransactionSummaryIdKeeper",
+      "database": "saas main DB (env SAAS_MONGO_URL, default mongoose connection)",
+      "domain": "Transactions",
+      "purpose": "Tracks which transaction ids were folded into a daily summary (idempotency).",
+      "repo": "saas",
+      "path": "src/models/TransactionSummaryIdKeeper.ts",
+      "line": 42,
+      "fields": [
+        { "name": "entityType", "type": "String" },
+        { "name": "entityId", "type": "String" },
+        { "name": "forDate", "type": "Date" },
+        { "name": "chargeType", "type": "String" },
+        { "name": "txId", "type": "String" }
+      ],
+      "indexes": [
+        {
+          "keys": { "entityId entityType forDate": 1 },
+          "options": { "unique": 1 },
+          "declaredIn": ":44 — malformed string spec"
+        }
+      ],
+      "usedBy": ["saas-service (rw, rough)"],
+      "notes": "Same malformed string index as transactionsummaries; idempotency intent not enforced by a valid unique index."
+    },
+    {
+      "name": "transactionstats",
+      "model": "TransactionStats",
+      "database": "saas main DB (env SAAS_MONGO_URL, default mongoose connection)",
+      "domain": "Transactions",
+      "purpose": "Daily per company/location transaction counts and amounts.",
+      "repo": "saas",
+      "path": "src/models/TransactionStats.ts",
+      "line": 19,
+      "fields": [
+        { "name": "locationId", "type": "String" },
+        { "name": "companyId", "type": "String" },
+        { "name": "statType", "type": "String" },
+        { "name": "overallTransactionCount", "type": "Number" },
+        { "name": "chargeTypeStats", "type": "Object" },
+        { "name": "amount", "type": "Object" },
+        { "name": "companyAmount", "type": "Decimal128" },
+        { "name": "date", "type": "Date" },
+        { "name": "billingTriggeredCount", "type": "Number" }
+      ],
+      "indexes": [
+        {
+          "keys": { "companyId": 1, "locationId": 1, "date": 1 },
+          "options": {},
+          "declaredIn": ":33"
+        },
+        { "keys": { "createdAt": 1 }, "options": {}, "declaredIn": ":34" }
+      ],
+      "usedBy": ["saas-service (rw)"],
+      "notes": "Model name ends in 's' so pluralization keeps 'transactionstats'."
+    },
+    {
+      "name": "WalletSummary",
+      "model": "WalletSummary",
+      "database": "saas main DB (env SAAS_MONGO_URL, default mongoose connection)",
+      "domain": "Transactions",
+      "purpose": "Wallet opening/closing balance audit summaries per entity.",
+      "repo": "saas",
+      "path": "src/models/walletSummary.ts",
+      "line": 12,
+      "fields": [
+        { "name": "entityId", "type": "String" },
+        { "name": "entityType", "type": "String" },
+        { "name": "stats", "type": "Object" },
+        { "name": "openingWalletBalance", "type": "Object" },
+        { "name": "closingWalletBalance", "type": "Object" },
+        { "name": "auditKey", "type": "String" }
+      ],
+      "indexes": [
+        { "keys": { "entityId": 1, "entityType": 1 }, "options": {}, "declaredIn": ":31" },
+        { "keys": { "auditKey": 1 }, "options": {}, "declaredIn": ":32" }
+      ],
+      "usedBy": ["saas-service (rw, rough)"],
+      "notes": "Explicit collection name 'WalletSummary' (3rd arg to mongoose.model)."
+    },
+    {
+      "name": "dailyusagesummaries",
+      "model": "DailyUsageSummary",
+      "database": "saas main DB (env SAAS_MONGO_URL, default mongoose connection)",
+      "domain": "Transactions",
+      "purpose": "Daily usage charge summary per entity.",
+      "repo": "saas",
+      "path": "src/models/DailyUsageSummary.ts",
+      "line": 72,
+      "fields": [
+        { "name": "entityType", "type": "String" },
+        { "name": "entityId", "type": "String" },
+        { "name": "forDate", "type": "Date" },
+        { "name": "charges", "type": "Array" },
+        { "name": "isDeleted", "type": "Boolean" }
+      ],
+      "indexes": [
+        {
+          "keys": { "entityId forDate": 1 },
+          "options": { "unique": true },
+          "declaredIn": ":74 — index('entityId forDate', true) malformed"
+        },
+        {
+          "keys": { "entityType forDate": 1 },
+          "options": { "unique": true },
+          "declaredIn": ":75 — malformed"
+        }
+      ],
+      "usedBy": ["saas-service (rw)"],
+      "notes": "MALFORMED: string field spec with boolean options; would not produce the intended compound indexes."
+    },
+    {
+      "name": "dailyusagesummarytemps",
+      "model": "DailyUsageSummaryTemp",
+      "database": "saas main DB (env SAAS_MONGO_URL, default mongoose connection)",
+      "domain": "Transactions",
+      "purpose": "Staging copy of daily usage summaries per batch.",
+      "repo": "saas",
+      "path": "src/models/DailyUsageSummaryTemp.ts",
+      "line": 8,
+      "fields": [
+        { "name": "batchId", "type": "Number" },
+        { "name": "entityType", "type": "String" },
+        { "name": "entityId", "type": "String" },
+        { "name": "forDate", "type": "Date" },
+        { "name": "charges", "type": "Array" }
+      ],
+      "indexes": [],
+      "usedBy": ["saas-service (rw, rough)"],
+      "notes": ""
+    },
+    {
+      "name": "monthlyusagesummaries",
+      "model": "MonthlyUsageSummary",
+      "database": "saas main DB (env SAAS_MONGO_URL, default mongoose connection)",
+      "domain": "Transactions",
+      "purpose": "Monthly usage amounts per entity (call/sms/whatsapp/other).",
+      "repo": "saas",
+      "path": "src/models/MonthlyUsageSummary.ts",
+      "line": 42,
+      "fields": [
+        { "name": "entityType", "type": "String" },
+        { "name": "entityId", "type": "String" },
+        { "name": "month", "type": "String" },
+        { "name": "callAmount", "type": "Number" },
+        { "name": "smsAmount", "type": "Number" },
+        { "name": "whatsappAmount", "type": "Number" },
+        { "name": "otherCharges", "type": "Array" }
+      ],
+      "indexes": [
+        {
+          "keys": { "entityId": 1 },
+          "options": { "unique": true },
+          "declaredIn": ":83 — index('entityId', true) malformed"
+        },
+        {
+          "keys": { "entityType": 1 },
+          "options": { "unique": true },
+          "declaredIn": ":84 — malformed"
+        },
+        { "keys": { "month": 1 }, "options": { "unique": true }, "declaredIn": ":85 — malformed" }
+      ],
+      "usedBy": ["saas-service (rw)"],
+      "notes": "index(string, true): options arg is a boolean, not {unique:true}; effective options unclear. If interpreted as unique single-field these would be wrong (one doc per entityId). autoIndex:false."
+    },
+    {
+      "name": "walletRechargeLocks",
+      "model": "WalletRechargeLock",
+      "database": "revex blade-platform standard DB (env MONGO_URL_BLADE_PLATFORM_STANDARD)",
+      "domain": "Recharge",
+      "purpose": "Short-lived mutex preventing concurrent recharges for a wallet entity.",
+      "repo": "revex",
+      "path": "apps/blade-platform/src/WalletRecharge/walletRechargeLock.schema.ts",
+      "line": 6,
+      "fields": [
+        { "name": "entityId", "type": "String" },
+        { "name": "entityType", "type": "String" },
+        { "name": "meta", "type": "Mixed" },
+        { "name": "expiresAt", "type": "Date" }
+      ],
+      "indexes": [
+        {
+          "keys": { "expiresAt": 1 },
+          "options": { "expires": "process.env.WALLET_RECHARGE_LOCK_EXPIRY || '15m'" },
+          "declaredIn": "field expires :26 (TTL)"
+        },
+        {
+          "keys": { "entityId": 1, "entityType": 1 },
+          "options": { "unique": true },
+          "declaredIn": ":35"
+        }
+      ],
+      "usedBy": ["blade-platform (rw)"],
+      "notes": "Lock acquisition relies on the unique index."
+    },
+    {
+      "name": "rechargefailurelogs",
+      "model": "RechargeFailureLog",
+      "database": "revex blade-platform standard DB (env MONGO_URL_BLADE_PLATFORM_STANDARD)",
+      "domain": "Recharge",
+      "purpose": "Failed wallet recharge attempts with provider decline details and retry state.",
+      "repo": "revex",
+      "path": "apps/blade-platform/src/WalletRecharge/rechargeFailureLog/rechargeFailureLog.schema.ts",
+      "line": 14,
+      "fields": [
+        { "name": "entityId", "type": "String" },
+        { "name": "entityType", "type": "String" },
+        { "name": "rechargeType", "type": "String" },
+        { "name": "reasonFailure", "type": "String" },
+        { "name": "failureCategory", "type": "String" },
+        { "name": "providerDeclineCode", "type": "String" },
+        { "name": "attempt", "type": "Number" },
+        { "name": "nextRetryAt", "type": "Date" },
+        { "name": "outcome", "type": "String" },
+        { "name": "correlationId", "type": "String" },
+        { "name": "resolvedAt", "type": "Date" }
+      ],
+      "indexes": [],
+      "usedBy": ["blade-platform (rw)"],
+      "notes": "Comment line 101: indexes are managed via Liquibase (not in repo); none declared in code."
+    },
+    {
+      "name": "rechargeanalytics",
+      "model": "RechargeAnalytics",
+      "database": "saas main DB (env SAAS_MONGO_URL, default mongoose connection)",
+      "domain": "Recharge",
+      "purpose": "Recharge/transaction analytics events emitted by saas-service.",
+      "repo": "saas",
+      "path": "src/models/recharge_analytics/rechargeAnalytics.schema.ts",
+      "line": 3,
+      "fields": [
+        { "name": "namespace", "type": "String" },
+        { "name": "chargeId", "type": "String" },
+        { "name": "chargeType", "type": "String" },
+        { "name": "transactionType", "type": "String" },
+        { "name": "transactionAmount", "type": "Number" },
+        { "name": "walletBalance", "type": "Number" },
+        { "name": "version", "type": "Number" },
+        { "name": "entityType", "type": "String" },
+        { "name": "entityTypeId", "type": "String" }
+      ],
+      "indexes": [],
+      "usedBy": ["saas-service (w, rough)"],
+      "notes": "Model in recharge_analytics/RechargeAnalytics.model.ts:4; name ends in 's' so stays 'rechargeanalytics'."
+    },
+    {
+      "name": "locationpaymentmethods",
+      "model": "LocationPaymentMethod",
+      "database": "saas main DB (env SAAS_MONGO_URL, default mongoose connection)",
+      "domain": "Recharge",
+      "purpose": "Saved card payment methods for locations (used for wallet recharge).",
+      "repo": "saas",
+      "path": "src/models/LocationPaymentMethod.ts",
+      "line": 19,
+      "fields": [
+        { "name": "companyId", "type": "String" },
+        { "name": "locationId", "type": "String" },
+        { "name": "customerId", "type": "String" },
+        { "name": "paymentId", "type": "String" },
+        { "name": "cardBrand", "type": "String" },
+        { "name": "expiryMonth", "type": "Number" },
+        { "name": "expiryYear", "type": "Number" },
+        { "name": "defaultPayment", "type": "Boolean" },
+        { "name": "fingerprint", "type": "String" }
+      ],
+      "indexes": [{ "keys": { "locationId": 1 }, "options": {}, "declaredIn": ":37" }],
+      "usedBy": ["saas-service (rw)"],
+      "notes": "Holds card metadata (PII-adjacent)."
+    },
+    {
+      "name": "chargeV5",
+      "model": "chargeV5",
+      "database": "revex blade-platform standard DB (env MONGO_URL_BLADE_PLATFORM_STANDARD)",
+      "domain": "Charge & billing",
+      "purpose": "Current per-event usage charge record (event body, location/company charge split) — source of truth for /v2/bill dedupe.",
+      "repo": "revex",
+      "path": "apps/billing/src/models/charge.schema.ts",
+      "line": 242,
+      "fields": [
+        { "name": "eventId", "type": "String" },
+        { "name": "eventBody", "type": "Mixed" },
+        { "name": "product", "type": "String" },
+        {
+          "name": "locationCharge",
+          "type": "Object (price, markup, amount Decimal128, transactionId)"
+        },
+        { "name": "companyCharge", "type": "Object" },
+        { "name": "sourceId", "type": "String" },
+        { "name": "triggerId", "type": "String" },
+        { "name": "userId", "type": "String" },
+        { "name": "contactId", "type": "String" },
+        { "name": "sourceType", "type": "String" }
+      ],
+      "indexes": [
+        {
+          "keys": { "sourceId": 1 },
+          "options": {},
+          "declaredIn": "blade vendored charge.schema.ts:90 (field index:true; not in billing copy)"
+        },
+        {
+          "keys": { "triggerId": 1 },
+          "options": {},
+          "declaredIn": "blade vendored charge.schema.ts:96 (field index:true)"
+        }
+      ],
+      "usedBy": ["billing (rw)", "blade-platform (rw)"],
+      "notes": "UNIQUENESS GAP: ChargeSchemaV5 = ChargeSchema.clone() + set('collection','chargeV5') (billing :240-242). No index at all on eventId; billing.controller.ts:97/228/338 dedupe via findOne({eventId}) then insert (check-then-act race). Blade chargeCreation.service.ts handles E11000 only for developer charges. Contrast: legacy chargeV3 (saas) declares unique eventId."
+    },
+    {
+      "name": "chargeV4",
+      "model": "Charge",
+      "database": "revex blade-platform standard DB (env MONGO_URL_BLADE_PLATFORM_STANDARD)",
+      "domain": "Charge & billing",
+      "purpose": "Previous-generation charge collection (pre-chargeV5 cutover); still registered.",
+      "repo": "revex",
+      "path": "apps/billing/src/models/charge.schema.ts",
+      "line": 66,
+      "fields": [
+        { "name": "eventId", "type": "String" },
+        { "name": "eventBody", "type": "Mixed" },
+        { "name": "product", "type": "String" },
+        { "name": "locationCharge", "type": "Object" },
+        { "name": "companyCharge", "type": "Object" },
+        { "name": "sourceId", "type": "String" },
+        { "name": "triggerId", "type": "String" },
+        { "name": "userId", "type": "String" },
+        { "name": "contactId", "type": "String" }
+      ],
+      "indexes": [
+        {
+          "keys": { "sourceId": 1 },
+          "options": {},
+          "declaredIn": "blade vendored charge.schema.ts:90"
+        },
+        {
+          "keys": { "triggerId": 1 },
+          "options": {},
+          "declaredIn": "blade vendored charge.schema.ts:96"
+        }
+      ],
+      "usedBy": [
+        "billing (r/legacy)",
+        "blade-platform (rw, WalletRecharge module registers Charge.name)"
+      ],
+      "notes": "No eventId index. charge.repository.ts:40 comment says dual-read fallback to chargeV4 removed after cutover."
+    },
+    {
+      "name": "chargeTB",
+      "model": "ChargeTB",
+      "database": "revex blade-platform standard DB (env MONGO_URL_BLADE_PLATFORM_STANDARD)",
+      "domain": "Charge & billing",
+      "purpose": "TigerBeetle-shadow charge records with transfer ids.",
+      "repo": "revex",
+      "path": "apps/billing/src/models/charge.schema.ts",
+      "line": 117,
+      "fields": [
+        { "name": "eventId", "type": "String" },
+        { "name": "eventBody", "type": "Mixed" },
+        { "name": "product", "type": "String" },
+        { "name": "companyTransferDId", "type": "String" },
+        { "name": "locationTransferDId", "type": "String" },
+        { "name": "locationCharge", "type": "Object" },
+        { "name": "companyCharge", "type": "Object" }
+      ],
+      "indexes": [],
+      "usedBy": ["billing (rw)"],
+      "notes": "No eventId unique index declared."
+    },
+    {
+      "name": "chargeV3",
+      "model": "chargeV3",
+      "database": "revex blade-platform standard DB (saas env MONGO_URL_BLADE_PLATFORM_STANDARD)",
+      "domain": "Charge & billing",
+      "purpose": "Legacy saas-service charge collection.",
+      "repo": "saas",
+      "path": "src/models/Charge.ts",
+      "line": 30,
+      "fields": [
+        { "name": "eventId", "type": "String" },
+        { "name": "eventBody", "type": "Mixed" },
+        { "name": "product", "type": "String" },
+        { "name": "locationCharge", "type": "Object" },
+        { "name": "companyCharge", "type": "Object" }
+      ],
+      "indexes": [{ "keys": { "eventId": 1 }, "options": { "unique": true }, "declaredIn": ":34" }],
+      "usedBy": ["saas-service (rw)"],
+      "notes": "Explicit collection 'chargeV3'."
+    },
+    {
+      "name": "developercharges",
+      "model": "DeveloperCharge",
+      "database": "revex blade-platform standard DB (env MONGO_URL_BLADE_PLATFORM_STANDARD)",
+      "domain": "Charge & billing",
+      "purpose": "Developer-team usage charges (never written to chargeV5).",
+      "repo": "revex",
+      "path": "apps/blade-platform/src/DeveloperCharge/developerCharge.schema.ts",
+      "line": 31,
+      "fields": [
+        { "name": "eventId", "type": "String" },
+        { "name": "developerTeamId", "type": "String" },
+        { "name": "product", "type": "String" },
+        { "name": "subProduct", "type": "String" },
+        { "name": "amount", "type": "Decimal128" },
+        { "name": "status", "type": "String" },
+        { "name": "chargeStore", "type": "String" },
+        { "name": "description", "type": "String" },
+        { "name": "transactionId", "type": "String" },
+        { "name": "eventBody", "type": "Mixed" }
+      ],
+      "indexes": [
+        { "keys": { "eventId": 1 }, "options": { "unique": true }, "declaredIn": ":96" },
+        { "keys": { "developerTeamId": 1, "createdAt": -1 }, "options": {}, "declaredIn": ":97" }
+      ],
+      "usedBy": ["blade-platform (rw)", "billing (rw, registers blade schema)"],
+      "notes": "Unique eventId is Billing's dedupe key; E11000 handled in chargeCreation.service.ts."
+    },
+    {
+      "name": "productconfigs",
+      "model": "ProductConfig",
+      "database": "revex blade-platform standard DB (env MONGO_URL_BLADE_PLATFORM_STANDARD)",
+      "domain": "Charge & billing",
+      "purpose": "Catalog of billable products: default billing/rebilling markup, pricing, availability.",
+      "repo": "revex",
+      "path": "apps/billing/src/models/productConfig.schema.ts",
+      "line": 35,
+      "fields": [
+        { "name": "product", "type": "String" },
+        { "name": "productTitle", "type": "String" },
+        { "name": "meta", "type": "Mixed" },
+        { "name": "availability", "type": "[String]" },
+        { "name": "config", "type": "Mixed" },
+        { "name": "deleted", "type": "Boolean" },
+        { "name": "parentId", "type": "String" },
+        { "name": "isLimitsEligible", "type": "Boolean" },
+        { "name": "isFixChargeEligible", "type": "Boolean" },
+        { "name": "bucket", "type": "String" }
+      ],
+      "indexes": [
+        {
+          "keys": { "product": 1 },
+          "options": { "unique": true },
+          "declaredIn": "billing :96 (blade vendored :87; saas ProductConfig.ts:68)"
+        },
+        { "keys": { "deleted": 1 }, "options": {}, "declaredIn": "billing :97 (saas :69)" },
+        {
+          "keys": { "product": 1 },
+          "options": {},
+          "declaredIn": "gatekeeper external/productConfig.schema.ts:40 (mirror, non-unique)"
+        }
+      ],
+      "usedBy": [
+        "billing (rw)",
+        "blade-platform (r)",
+        "revex-wallet-gatekeeper (r, mirror)",
+        "saas-service (rw)"
+      ],
+      "notes": "Gatekeeper mirror declares non-unique {product:1} on a collection whose owner declares unique {product:1} — conflicting options if gatekeeper's autoIndex is on."
+    },
+    {
+      "name": "developerproductconfigs",
+      "model": "DeveloperProductConfig",
+      "database": "revex blade-platform standard DB (env MONGO_URL_BLADE_PLATFORM_STANDARD)",
+      "domain": "Charge & billing",
+      "purpose": "Product catalog for developer billing (enabled flag, price).",
+      "repo": "revex",
+      "path": "apps/billing/src/models/developerProductConfig.schema.ts",
+      "line": 14,
+      "fields": [
+        { "name": "product", "type": "String" },
+        { "name": "productTitle", "type": "String" },
+        { "name": "enabled", "type": "Boolean" },
+        { "name": "price", "type": "Number" },
+        { "name": "meta", "type": "Mixed" }
+      ],
+      "indexes": [{ "keys": { "product": 1 }, "options": { "unique": true }, "declaredIn": ":39" }],
+      "usedBy": ["billing (rw)", "revex-wallet-gatekeeper (r, mirror)"],
+      "notes": ""
+    },
+    {
+      "name": "baasconfigs",
+      "model": "BaaSConfig",
+      "database": "revex blade-platform standard DB (env MONGO_URL_BLADE_PLATFORM_STANDARD)",
+      "domain": "Charge & billing",
+      "purpose": "Per-entity (agency/location) billing-as-a-service product overrides, limits, billing model.",
+      "repo": "revex",
+      "path": "apps/billing/src/models/baasConfig.schema.ts",
+      "line": 7,
+      "fields": [
+        { "name": "entityId", "type": "String" },
+        { "name": "entityType", "type": "String" },
+        { "name": "products", "type": "Mixed" },
+        { "name": "meta", "type": "Mixed" },
+        { "name": "productLimits", "type": "Mixed" },
+        { "name": "billingModel", "type": "String" },
+        { "name": "interval", "type": "String" },
+        { "name": "deleted", "type": "Boolean" },
+        { "name": "lastUpdatedBy", "type": "String" }
+      ],
+      "indexes": [
+        {
+          "keys": { "entityId": 1, "deleted": 1 },
+          "options": { "unique": true },
+          "declaredIn": "billing :48 (saas BaaSConfig.ts:39)"
+        },
+        {
+          "keys": { "entityId": 1, "entityType": 1 },
+          "options": {},
+          "declaredIn": "gatekeeper external/baasConfig.schema.ts:50 (mirror)"
+        }
+      ],
+      "usedBy": ["billing (rw)", "revex-wallet-gatekeeper (r, mirror)", "saas-service (rw)"],
+      "notes": "strict:false. Unique {entityId,deleted} allows only one soft-deleted doc per entity."
+    },
+    {
+      "name": "baaslogs",
+      "model": "BaasLogs",
+      "database": "revex blade-platform standard DB (env MONGO_URL_BLADE_PLATFORM_STANDARD)",
+      "domain": "Charge & billing",
+      "purpose": "Change log of BaaS config edits per entity.",
+      "repo": "revex",
+      "path": "apps/billing/src/models/baasLogs.schema.ts",
+      "line": 4,
+      "fields": [
+        { "name": "entityId", "type": "String" },
+        { "name": "deleted", "type": "Boolean" },
+        { "name": "deletedBy", "type": "String" },
+        { "name": "deletedAt", "type": "Date" },
+        { "name": "logs", "type": "Array" }
+      ],
+      "indexes": [],
+      "usedBy": ["billing (rw)"],
+      "notes": "Billing declares no index. saas-service has same-named collection on its main DB with unique {entityId,deleted} (separate entry)."
+    },
+    {
+      "name": "baaslogs",
+      "model": "BaasLogs",
+      "database": "saas main DB (env SAAS_MONGO_URL, default mongoose connection)",
+      "domain": "Charge & billing",
+      "purpose": "Legacy saas-service BaaS config change log.",
+      "repo": "saas",
+      "path": "src/models/BaaSLogs.ts",
+      "line": 9,
+      "fields": [
+        { "name": "entityId", "type": "String" },
+        { "name": "deleted", "type": "Boolean" },
+        { "name": "deletedBy", "type": "String" },
+        { "name": "deletedAt", "type": "Date" },
+        { "name": "logs", "type": "Array" }
+      ],
+      "indexes": [
+        {
+          "keys": { "entityId": 1, "deleted": 1 },
+          "options": { "unique": true },
+          "declaredIn": ":19"
+        }
+      ],
+      "usedBy": ["saas-service (rw, rough)"],
+      "notes": "Default mongoose connection."
+    },
+    {
+      "name": "rebillingconfigs",
+      "model": "RebillingConfig",
+      "database": "revex blade-platform standard DB (env MONGO_URL_BLADE_PLATFORM_STANDARD)",
+      "domain": "Charge & billing",
+      "purpose": "Agency rebilling (markup) configuration per company/plan.",
+      "repo": "revex",
+      "path": "apps/billing/src/models/rebillingConfig.schema.ts",
+      "line": 15,
+      "fields": [
+        { "name": "companyId", "type": "String" },
+        { "name": "planId", "type": "String" },
+        { "name": "products", "type": "Mixed" },
+        { "name": "productLimits", "type": "Mixed" },
+        { "name": "billingModel", "type": "String" },
+        { "name": "deleted", "type": "Boolean" },
+        { "name": "deletedBy", "type": "String" },
+        { "name": "deletedAt", "type": "Date" },
+        { "name": "lastUpdatedBy", "type": "String" }
+      ],
+      "indexes": [
+        {
+          "keys": { "companyId": 1, "planId": 1, "deleted": 1 },
+          "options": { "unique": true },
+          "declaredIn": "billing :47 (saas RebillingConfig.ts:32)"
+        }
+      ],
+      "usedBy": ["billing (rw)", "saas-service (rw)"],
+      "notes": "strict:false."
+    },
+    {
+      "name": "sourceSchemas",
+      "model": "SourceSchema",
+      "database": "revex blade-platform standard DB (env MONGO_URL_BLADE_PLATFORM_STANDARD)",
+      "domain": "Charge & billing",
+      "purpose": "Registry mapping charge sourceType to UI display label for wallet spending views.",
+      "repo": "revex",
+      "path": "apps/blade-platform/common/vendored-apps/billing/src/models/sourceSchema.schema.ts",
+      "line": 31,
+      "fields": [
+        { "name": "sourceType", "type": "String" },
+        { "name": "sourceName", "type": "String" },
+        { "name": "deleted", "type": "Boolean" }
+      ],
+      "indexes": [
+        {
+          "keys": { "sourceType": 1 },
+          "options": { "unique": true, "name": "sourceType_unique" },
+          "declaredIn": ":48"
+        },
+        {
+          "keys": { "deleted": 1, "sourceType": 1 },
+          "options": { "name": "deleted_sourceType" },
+          "declaredIn": ":63"
+        }
+      ],
+      "usedBy": ["blade-platform (rw)"],
+      "notes": "Comment: cluster runs with notablescan:true, so list queries need an index leading with `deleted`."
+    },
+    {
+      "name": "bladeinvoices",
+      "model": "BladeInvoice",
+      "database": "revex blade-platform standard DB (env MONGO_URL_BLADE_PLATFORM_STANDARD)",
+      "domain": "Charge & billing",
+      "purpose": "Invoices/receipts generated for wallet top-ups and usage (with tax calculation, storage link).",
+      "repo": "revex",
+      "path": "apps/blade-platform/src/blade-invoice/blade-invoice.schema.ts",
+      "line": 10,
+      "fields": [
+        { "name": "entityId", "type": "String" },
+        { "name": "entityType", "type": "String" },
+        { "name": "invoiceType", "type": "String" },
+        { "name": "transactionId", "type": "String" },
+        { "name": "startDate", "type": "Date" },
+        { "name": "endDate", "type": "Date" },
+        { "name": "invoiceStorageLink", "type": "String" },
+        { "name": "invoiceId", "type": "String" },
+        { "name": "taxCalculation", "type": "Mixed" },
+        { "name": "amount", "type": "Number" }
+      ],
+      "indexes": [
+        {
+          "keys": { "entityId": 1, "createdAt": 1, "transactionId": 1 },
+          "options": {},
+          "declaredIn": ":66"
+        },
+        {
+          "keys": { "transactionId": 1, "invoiceType": 1 },
+          "options": {
+            "unique": true,
+            "partialFilterExpression": {
+              "invoiceType": "BladeInvoiceChargeTypeEnum.WALLET_TOP_UP_RECEIPT"
+            }
+          },
+          "declaredIn": ":72"
+        }
+      ],
+      "usedBy": ["blade-platform (rw)"],
+      "notes": "blade-invoice.queries.ts:321 handles E11000 from the partial unique index."
+    },
+    {
+      "name": "rebillinglogs",
+      "model": "RebillingLog",
+      "database": "saas standard v2 DB (env MONGO_URL_SAAS_STANDARD_V2)",
+      "domain": "Charge & billing",
+      "purpose": "Per-location rebilling change logs.",
+      "repo": "saas",
+      "path": "src/models/RebillingLogs.ts",
+      "line": 61,
+      "fields": [
+        { "name": "companyId", "type": "String" },
+        { "name": "locationId", "type": "String" },
+        { "name": "logs", "type": "Object" },
+        { "name": "createdAt", "type": "Date" }
+      ],
+      "indexes": [],
+      "usedBy": ["saas-service (rw)"],
+      "notes": ""
+    },
+    {
+      "name": "SMSRebillAuditLogs",
+      "model": "SmsRebillingAuditLog",
+      "database": "revex lc-phone saas standard DB (env MONGO_URL_REVEX_LC_PHONE_SAAS_STANDARD)",
+      "domain": "Charge & billing",
+      "purpose": "Audit of SMS rebilling backfill decisions per message (~16M docs).",
+      "repo": "saas",
+      "path": "src/models/SmsRebillingAuditLog.ts",
+      "line": 124,
+      "fields": [
+        { "name": "_id", "type": "String" },
+        { "name": "messageId", "type": "String" },
+        { "name": "locationId", "type": "String" },
+        { "name": "companyId", "type": "String" },
+        { "name": "segments", "type": "Number" },
+        { "name": "basePrice", "type": "Number" },
+        { "name": "rebilling", "type": "Object" },
+        { "name": "outcome", "type": "String" },
+        { "name": "batchType", "type": "String" },
+        { "name": "runId", "type": "String" },
+        { "name": "cycleDate", "type": "String" }
+      ],
+      "indexes": [
+        { "keys": { "locationId": 1 }, "options": {}, "declaredIn": "field :130" },
+        { "keys": { "runId": 1, "outcome": 1 }, "options": {}, "declaredIn": ":168" },
+        { "keys": { "cycleDate": 1, "outcome": 1 }, "options": {}, "declaredIn": ":169" },
+        { "keys": { "outcome": 1, "basePrice": 1 }, "options": {}, "declaredIn": ":170" },
+        { "keys": { "batchType": 1, "messageDateAdded": 1 }, "options": {}, "declaredIn": ":174" },
+        { "keys": { "batchType": 1, "outcome": 1 }, "options": {}, "declaredIn": ":175" }
+      ],
+      "usedBy": ["saas-service (rw)"],
+      "notes": "Explicit collection 'SMSRebillAuditLogs'; upsert by _id."
+    },
+    {
+      "name": "CallSMSChargeV2",
+      "model": "CallSMSChargeV2",
+      "database": "saas main DB (env SAAS_MONGO_URL, default mongoose connection)",
+      "domain": "Charge & billing",
+      "purpose": "Legacy per-message call/SMS charge records.",
+      "repo": "saas",
+      "path": "src/models/CallSMSCharge.ts",
+      "line": 27,
+      "fields": [
+        { "name": "locationId", "type": "String" },
+        { "name": "companyId", "type": "String" },
+        { "name": "contactId", "type": "String" },
+        { "name": "conversationId", "type": "String" },
+        { "name": "messageId", "type": "String" },
+        { "name": "direction", "type": "String" },
+        { "name": "price", "type": "Number" },
+        { "name": "amount", "type": "Decimal128" },
+        { "name": "companyAmount", "type": "Decimal128" },
+        { "name": "priceUnit", "type": "String" }
+      ],
+      "indexes": [{ "keys": { "messageId": 1 }, "options": {}, "declaredIn": ":51" }],
+      "usedBy": ["saas-service (rw)"],
+      "notes": "Explicit collection 'CallSMSChargeV2'. No unique messageId."
+    },
+    {
+      "name": "emailcharges",
+      "model": "EmailCharge",
+      "database": "saas main DB (env SAAS_MONGO_URL, default mongoose connection)",
+      "domain": "Charge & billing",
+      "purpose": "Legacy per-email charge records.",
+      "repo": "saas",
+      "path": "src/models/EmailCharge.ts",
+      "line": 22,
+      "fields": [
+        { "name": "locationId", "type": "String" },
+        { "name": "companyId", "type": "String" },
+        { "name": "conversationId", "type": "String" },
+        { "name": "messageId", "type": "String" },
+        { "name": "direction", "type": "String" },
+        { "name": "price", "type": "Number" },
+        { "name": "amount", "type": "Decimal128" },
+        { "name": "companyAmount", "type": "Decimal128" },
+        { "name": "to", "type": "[String]" }
+      ],
+      "indexes": [{ "keys": { "messageId": 1 }, "options": {}, "declaredIn": ":44" }],
+      "usedBy": ["saas-service (rw)"],
+      "notes": ""
+    },
+    {
+      "name": "TwilioChargeV2",
+      "model": "TwilioChargeV2",
+      "database": "saas main DB (env SAAS_MONGO_URL, default mongoose connection)",
+      "domain": "Charge & billing",
+      "purpose": "Legacy Twilio usage-record charges.",
+      "repo": "saas",
+      "path": "src/models/TwilioCharge.ts",
+      "line": 26,
+      "fields": [
+        { "name": "recordId", "type": "String" },
+        { "name": "locationId", "type": "String" },
+        { "name": "companyId", "type": "String" },
+        { "name": "price", "type": "Number" },
+        { "name": "amount", "type": "Decimal128" },
+        { "name": "count", "type": "Number" },
+        { "name": "category", "type": "String" },
+        { "name": "asOf", "type": "Date" },
+        { "name": "accountSid", "type": "String" }
+      ],
+      "indexes": [
+        {
+          "keys": { "recordId": 1 },
+          "options": { "unique": true, "sparse": true },
+          "declaredIn": "field :27"
+        },
+        { "keys": { "locationId": 1 }, "options": {}, "declaredIn": ":51" },
+        { "keys": { "companyId": 1 }, "options": {}, "declaredIn": ":52" },
+        {
+          "keys": { "recordId": 1 },
+          "options": {},
+          "declaredIn": ":53 (conflicts with field unique+sparse)"
+        }
+      ],
+      "usedBy": ["saas-service (rw)"],
+      "notes": "{recordId:1} declared twice with different options."
+    },
+    {
+      "name": "chargerequests",
+      "model": "ChargeRequest",
+      "database": "revex lc-phone saas standard DB (env MONGO_URL_REVEX_LC_PHONE_SAAS_STANDARD)",
+      "domain": "Charge & billing",
+      "purpose": "Queued charge requests (state machine) before posting to billing.",
+      "repo": "saas",
+      "path": "src/models/ChargeRequest.ts",
+      "line": 63,
+      "fields": [
+        { "name": "_id", "type": "String" },
+        { "name": "chargeBody", "type": "Mixed" },
+        { "name": "state", "type": "String" },
+        { "name": "errorCode", "type": "String" },
+        { "name": "chargeType", "type": "String" },
+        { "name": "createdAt", "type": "Date" }
+      ],
+      "indexes": [{ "keys": { "state": 1, "createdAt": 1 }, "options": {}, "declaredIn": ":74" }],
+      "usedBy": [
+        "saas-service (rw)",
+        "lc-phone (rw; declares explicit collection 'chargerequests' in its own schema)"
+      ],
+      "notes": "Idempotency via caller-supplied string _id."
+    },
+    {
+      "name": "walletSubscription",
+      "model": "Subscription",
+      "database": "revex blade-platform standard DB (env MONGO_URL_BLADE_PLATFORM_STANDARD)",
+      "domain": "Subscriptions",
+      "purpose": "Wallet-funded recurring subscriptions per entity.",
+      "repo": "revex",
+      "path": "apps/wallet-subscriptions/src/subscriptions/subscription.schema.ts",
+      "line": 22,
+      "fields": [
+        { "name": "priceId", "type": "ObjectId" },
+        { "name": "entityId", "type": "String" },
+        { "name": "companyId", "type": "String" },
+        { "name": "entityType", "type": "String" },
+        { "name": "startDate", "type": "Date" },
+        { "name": "endDate", "type": "Date" },
+        { "name": "status", "type": "String" },
+        { "name": "quantity", "type": "Number" },
+        { "name": "amount", "type": "Decimal128" },
+        { "name": "nextExecutionAt", "type": "String" },
+        { "name": "cancelAt", "type": "Date" }
+      ],
+      "indexes": [],
+      "usedBy": ["wallet-subscriptions (rw)"],
+      "notes": "No indexes declared; queries by entityId/status/nextExecutionAt unindexed in code."
+    },
+    {
+      "name": "subscriptionPrices",
+      "model": "Price",
+      "database": "revex blade-platform standard DB (env MONGO_URL_BLADE_PLATFORM_STANDARD)",
+      "domain": "Subscriptions",
+      "purpose": "Prices (one-time/recurring) for wallet subscription products.",
+      "repo": "revex",
+      "path": "apps/wallet-subscriptions/src/prices/price.schema.ts",
+      "line": 20,
+      "fields": [
+        { "name": "currency", "type": "String" },
+        { "name": "amount", "type": "Decimal128" },
+        { "name": "type", "type": "String" },
+        { "name": "recurring", "type": "Object (interval,count)" },
+        { "name": "productId", "type": "ObjectId" },
+        { "name": "deleted", "type": "Boolean" },
+        { "name": "deletedAt", "type": "Date" }
+      ],
+      "indexes": [{ "keys": { "productId": 1, "deleted": 1 }, "options": {}, "declaredIn": ":64" }],
+      "usedBy": ["wallet-subscriptions (rw)"],
+      "notes": ""
+    },
+    {
+      "name": "subscriptionProducts",
+      "model": "Product",
+      "database": "revex blade-platform standard DB (env MONGO_URL_BLADE_PLATFORM_STANDARD)",
+      "domain": "Subscriptions",
+      "purpose": "Products sold as wallet subscriptions.",
+      "repo": "revex",
+      "path": "apps/wallet-subscriptions/src/products/product.schema.ts",
+      "line": 8,
+      "fields": [
+        { "name": "productCode", "type": "String" },
+        { "name": "productLabel", "type": "String" },
+        { "name": "description", "type": "String" },
+        { "name": "entityId", "type": "String" },
+        { "name": "entityType", "type": "String" },
+        { "name": "metadata", "type": "Object" },
+        { "name": "active", "type": "Boolean" },
+        { "name": "deleted", "type": "Boolean" }
+      ],
+      "indexes": [
+        {
+          "keys": { "productCode": 1, "entityId": 1, "deleted": 1 },
+          "options": { "unique": true },
+          "declaredIn": ":42"
+        }
+      ],
+      "usedBy": ["wallet-subscriptions (rw)"],
+      "notes": ""
+    },
+    {
+      "name": "subscriptionInvoices",
+      "model": "Invoice",
+      "database": "revex blade-platform standard DB (env MONGO_URL_BLADE_PLATFORM_STANDARD)",
+      "domain": "Subscriptions",
+      "purpose": "Invoices raised per subscription billing cycle and their settlement status.",
+      "repo": "revex",
+      "path": "apps/wallet-subscriptions/src/invoices/invoice.schema.ts",
+      "line": 19,
+      "fields": [
+        { "name": "subscriptionId", "type": "ObjectId" },
+        { "name": "entityId", "type": "String" },
+        { "name": "entityType", "type": "String" },
+        { "name": "priceId", "type": "ObjectId" },
+        { "name": "amount", "type": "Decimal128" },
+        { "name": "currency", "type": "String" },
+        { "name": "invoiceDate", "type": "Date" },
+        { "name": "dueDate", "type": "Date" },
+        { "name": "status", "type": "String" },
+        { "name": "retryCount", "type": "Number" },
+        { "name": "chargeId", "type": "String" }
+      ],
+      "indexes": [],
+      "usedBy": ["wallet-subscriptions (rw)"],
+      "notes": "No indexes; no uniqueness on (subscriptionId, invoiceDate) to prevent double invoicing."
+    },
+    {
+      "name": "reselling-subscriptions",
+      "model": "reselling-subscriptions",
+      "database": "saas main DB (env SAAS_MONGO_URL, default mongoose connection)",
+      "domain": "Subscriptions",
+      "purpose": "Reselling product subscriptions purchased by agencies/locations.",
+      "repo": "saas",
+      "path": "src/models/ResellingSubscriptions.ts",
+      "line": 58,
+      "fields": [
+        { "name": "deleted", "type": "Boolean" },
+        { "name": "productCode", "type": "String" },
+        { "name": "planId", "type": "String" },
+        { "name": "consumer", "type": "String" },
+        { "name": "consumerId", "type": "String" },
+        { "name": "amount", "type": "Number" },
+        { "name": "currency", "type": "String" },
+        { "name": "subscriptionId", "type": "String" },
+        { "name": "paymentStatus", "type": "String" },
+        { "name": "meta", "type": "Object" }
+      ],
+      "indexes": [
+        { "keys": { "deleted": 1, "subscriptionId": 1 }, "options": {}, "declaredIn": ":116" },
+        {
+          "keys": { "deleted": 1, "consumer": 1, "consumerId": 1 },
+          "options": {},
+          "declaredIn": ":117"
+        },
+        {
+          "keys": { "deleted": 1, "productCode": 1, "planId": 1 },
+          "options": {},
+          "declaredIn": ":118"
+        },
+        {
+          "keys": { "deleted": 1, "meta.secondaryCompanySubscriptionId": 1 },
+          "options": { "partialFilterExpression": { "deleted": false } },
+          "declaredIn": ":120"
+        },
+        {
+          "keys": { "deleted": 1, "consumer": 1, "meta.secondaryCompanySubscriptionId": 1 },
+          "options": { "partialFilterExpression": { "deleted": false } },
+          "declaredIn": ":132"
+        }
+      ],
+      "usedBy": ["saas-service (rw, rough)"],
+      "notes": "Explicit collection option."
+    },
+    {
+      "name": "companysubscriptionplans",
+      "model": "CompanySubscriptionPlan",
+      "database": "saas standard v2 DB (env MONGO_URL_SAAS_STANDARD_V2)",
+      "domain": "Subscriptions",
+      "purpose": "SaaS-mode plans an agency sells to sub-accounts (products, rebilling, Stripe plans).",
+      "repo": "saas",
+      "path": "src/models/CompanySubscriptionPlan.ts",
+      "line": 65,
+      "fields": [
+        { "name": "companyId", "type": "String" },
+        { "name": "title", "type": "String" },
+        { "name": "saasProducts", "type": "[String]" },
+        { "name": "twilioRebilling", "type": "Mixed" },
+        { "name": "complementaryCredits", "type": "Mixed" },
+        { "name": "stripeProductId", "type": "String" },
+        { "name": "stripePlans", "type": "Array" },
+        { "name": "planLevel", "type": "Number" },
+        { "name": "categoryId", "type": "ObjectId" },
+        { "name": "userLimit", "type": "Number" }
+      ],
+      "indexes": [
+        { "keys": { "companyId": 1 }, "options": {}, "declaredIn": ":94" },
+        { "keys": { "stripeProductId": 1 }, "options": {}, "declaredIn": ":95" },
+        { "keys": { "categoryId": 1, "planLevel": 1 }, "options": {}, "declaredIn": ":96" }
+      ],
+      "usedBy": ["saas-service (rw)"],
+      "notes": ""
+    },
+    {
+      "name": "plancategories",
+      "model": "PlanCategory",
+      "database": "saas standard v2 DB (env MONGO_URL_SAAS_STANDARD_V2)",
+      "domain": "Subscriptions",
+      "purpose": "Grouping categories for SaaS plans.",
+      "repo": "saas",
+      "path": "src/models/planCategory.ts",
+      "line": 4,
+      "fields": [
+        { "name": "companyId", "type": "String" },
+        { "name": "title", "type": "String" },
+        { "name": "currency", "type": "String" },
+        { "name": "locationId", "type": "String" },
+        { "name": "locationName", "type": "String" }
+      ],
+      "indexes": [
+        {
+          "keys": { "companyId": 1, "locationId": 1, "title": 1 },
+          "options": { "unique": true },
+          "declaredIn": ":13"
+        }
+      ],
+      "usedBy": ["saas-service (rw, rough)"],
+      "notes": "Pluralized 'plancategory' -> 'plancategories'."
+    },
+    {
+      "name": "wallettaxes",
+      "model": "WalletTax",
+      "database": "revex blade-platform standard DB (env MONGO_URL_BLADE_PLATFORM_STANDARD)",
+      "domain": "Tax",
+      "purpose": "Per-entity per-day tax computation on wallet usage (Stripe Tax docs), committed flag.",
+      "repo": "revex",
+      "path": "apps/blade-platform/src/wallet-tax/wallet-tax.schema.ts",
+      "line": 5,
+      "fields": [
+        { "name": "_id", "type": "String" },
+        { "name": "entityId", "type": "String" },
+        { "name": "entityType", "type": "String" },
+        { "name": "forDate", "type": "Date" },
+        { "name": "taxSummary", "type": "Mixed" },
+        { "name": "taxDoc", "type": "Mixed" },
+        { "name": "billingCharge", "type": "String" },
+        { "name": "committed", "type": "Boolean" },
+        { "name": "isDeleted", "type": "Boolean" }
+      ],
+      "indexes": [{ "keys": { "committed": 1, "forDate": 1 }, "options": {}, "declaredIn": ":37" }],
+      "usedBy": ["blade-platform (rw)"],
+      "notes": "Deterministic string _id gives idempotency."
+    },
+    {
+      "name": "wallettaxes",
+      "model": "WalletTax",
+      "database": "saas main DB (env SAAS_MONGO_URL, default mongoose connection)",
+      "domain": "Tax",
+      "purpose": "Legacy saas-service wallet tax docs (same shape, saas main DB).",
+      "repo": "saas",
+      "path": "src/models/WalletTax.ts",
+      "line": 117,
+      "fields": [
+        { "name": "_id", "type": "String" },
+        { "name": "entityId", "type": "String" },
+        { "name": "entityType", "type": "String" },
+        { "name": "forDate", "type": "Date" },
+        { "name": "taxSummary", "type": "Mixed" },
+        { "name": "taxDoc", "type": "Mixed" },
+        { "name": "billingCharge", "type": "String" },
+        { "name": "committed", "type": "Boolean" },
+        { "name": "isDeleted", "type": "Boolean" }
+      ],
+      "indexes": [],
+      "usedBy": ["saas-service (rw)"],
+      "notes": "Pluralized 'wallettax' -> 'wallettaxes'."
+    },
+    {
+      "name": "taxregistrations",
+      "model": "TaxRegistration",
+      "database": "revex blade-platform standard DB (env MONGO_URL_BLADE_PLATFORM_STANDARD)",
+      "domain": "Tax",
+      "purpose": "Agency tax registrations per country/state linked to Stripe Tax, with tax windows and treatment.",
+      "repo": "revex",
+      "path": "apps/blade-platform/src/tax/taxRegistrations/taxRegistration.schema.ts",
+      "line": 48,
+      "fields": [
+        { "name": "companyId", "type": "String" },
+        { "name": "stripeConnectId", "type": "String" },
+        { "name": "stripeTaxRegistrationId", "type": "String" },
+        { "name": "countryCode", "type": "String" },
+        { "name": "stateCode", "type": "String" },
+        { "name": "internalStatus", "type": "String" },
+        { "name": "taxTreatment", "type": "String" },
+        { "name": "collectionMode", "type": "String" },
+        { "name": "taxOnActualUsageWindow", "type": "Object" },
+        { "name": "taxOnRechargeWindow", "type": "Object" }
+      ],
+      "indexes": [
+        {
+          "keys": { "companyId": 1, "countryCode": 1, "stateCode": 1 },
+          "options": {
+            "unique": true,
+            "partialFilterExpression": { "countryCode": { "$exists": true } }
+          },
+          "declaredIn": ":154"
+        },
+        {
+          "keys": { "companyId": 1, "stripeTaxRegistrationId": 1 },
+          "options": { "sparse": true },
+          "declaredIn": ":160"
+        },
+        {
+          "keys": {
+            "companyId": 1,
+            "internalStatus": 1,
+            "taxTreatment": 1,
+            "collectionMode": 1,
+            "createdAt": -1
+          },
+          "options": {},
+          "declaredIn": ":165"
+        },
+        { "keys": { "companyId": 1, "createdAt": -1 }, "options": {}, "declaredIn": ":173" },
+        {
+          "keys": { "taxOnActualUsageWindow.startDate": 1, "taxOnActualUsageWindow.endDate": 1 },
+          "options": { "sparse": true },
+          "declaredIn": ":176"
+        },
+        {
+          "keys": { "taxOnRechargeWindow.startDate": 1, "taxOnRechargeWindow.endDate": 1 },
+          "options": { "sparse": true },
+          "declaredIn": ":183"
+        },
+        { "keys": { "internalStatus": 1 }, "options": { "sparse": true }, "declaredIn": ":192" },
+        {
+          "keys": { "usageBasedProductConfig.nonTaxableProducts": 1 },
+          "options": { "sparse": true },
+          "declaredIn": ":195"
+        },
+        {
+          "keys": { "subscriptionBasedProductConfig.nonTaxableProducts": 1 },
+          "options": { "sparse": true },
+          "declaredIn": ":199"
+        }
+      ],
+      "usedBy": ["blade-platform (rw)"],
+      "notes": "Comment line 60 says stripeTaxRegistrationId 'will be unique per company' but index is non-unique (sparse) by design for backward-compat."
+    },
+    {
+      "name": "taxpresets",
+      "model": "TaxPreset",
+      "database": "revex blade-platform standard DB (env MONGO_URL_BLADE_PLATFORM_STANDARD)",
+      "domain": "Tax",
+      "purpose": "One default tax preset per agency (treatment, collection mode, non-taxable products).",
+      "repo": "revex",
+      "path": "apps/blade-platform/src/tax/taxPresets/taxPreset.schema.ts",
+      "line": 11,
+      "fields": [
+        { "name": "companyId", "type": "String" },
+        { "name": "description", "type": "String" },
+        { "name": "taxTreatment", "type": "String" },
+        { "name": "collectionMode", "type": "String" },
+        { "name": "agreedTnC", "type": "Boolean" },
+        { "name": "isActive", "type": "Boolean" },
+        { "name": "createdBy", "type": "String" },
+        { "name": "lastModifiedBy", "type": "String" }
+      ],
+      "indexes": [
+        { "keys": { "companyId": 1 }, "options": { "unique": true }, "declaredIn": "field :13" },
+        {
+          "keys": { "companyId": 1 },
+          "options": { "unique": true },
+          "declaredIn": ":78 (duplicate)"
+        }
+      ],
+      "usedBy": ["blade-platform (rw)"],
+      "notes": "Same unique index declared twice (field + schema.index); Mongoose warns on duplicate."
+    },
+    {
+      "name": "producttaxcodes",
+      "model": "ProductTaxCodes",
+      "database": "revex blade-platform standard DB (env MONGO_URL_BLADE_PLATFORM_STANDARD)",
+      "domain": "Tax",
+      "purpose": "Per-agency map of productId -> Stripe tax code, synced from Stripe.",
+      "repo": "revex",
+      "path": "apps/blade-platform/src/tax/productTaxCodes/productTaxCodes.schema.ts",
+      "line": 30,
+      "fields": [
+        { "name": "companyId", "type": "String" },
+        { "name": "productTaxCodes", "type": "Map" },
+        { "name": "defaultStripeTaxCode", "type": "String" },
+        { "name": "syncedAt", "type": "Date" },
+        { "name": "isInitialized", "type": "Boolean" }
+      ],
+      "indexes": [
+        {
+          "keys": { "companyId": 1 },
+          "options": { "unique": true },
+          "declaredIn": "field unique+index :36"
+        },
+        { "keys": { "companyId": 1, "updatedAt": -1 }, "options": {}, "declaredIn": ":59" },
+        { "keys": { "syncedAt": 1 }, "options": {}, "declaredIn": ":60" }
+      ],
+      "usedBy": ["blade-platform (rw)"],
+      "notes": "versionKey:false."
+    },
+    {
+      "name": "feature-configs",
+      "model": "FeatureConfig",
+      "database": "revex blade-platform standard DB (env MONGO_URL_BLADE_PLATFORM_STANDARD)",
+      "domain": "Config",
+      "purpose": "Wallet feature flags with optional per-entity overrides.",
+      "repo": "revex",
+      "path": "apps/blade-platform/src/FeatureConfig/schema/feature-config.schema.ts",
+      "line": 15,
+      "fields": [
+        { "name": "key", "type": "String" },
+        { "name": "enabled", "type": "Boolean" },
+        { "name": "description", "type": "String" },
+        { "name": "config", "type": "Mixed" },
+        { "name": "entityOverrides", "type": "Array (entityType, entityId, enabled)" },
+        { "name": "updatedBy", "type": "String" }
+      ],
+      "indexes": [
+        {
+          "keys": { "key": 1 },
+          "options": { "unique": true },
+          "declaredIn": ":56 (documentation only; Liquibase-managed)"
+        }
+      ],
+      "usedBy": ["blade-platform (rw)"],
+      "notes": "Comments lines 33-34 and 54-55: index is Liquibase-managed and autoIndex is off in deployed envs. Liquibase changelog not present in this repo."
+    },
+    {
+      "name": "notificationconfig",
+      "model": "NotificationConfig",
+      "database": "revex blade-platform standard DB (env MONGO_URL_BLADE_PLATFORM_STANDARD)",
+      "domain": "Config",
+      "purpose": "Per-agency wallet notification settings (enabled, recipient emails).",
+      "repo": "revex",
+      "path": "apps/blade-platform/src/NotificationConfig/schema/notification-config.schema.ts",
+      "line": 6,
+      "fields": [
+        { "name": "companyId", "type": "String" },
+        { "name": "enabled", "type": "Boolean" },
+        { "name": "emails", "type": "[String]" },
+        { "name": "createdBy", "type": "String" },
+        { "name": "updatedBy", "type": "String" }
+      ],
+      "indexes": [
+        { "keys": { "companyId": 1 }, "options": { "unique": true }, "declaredIn": ":30" }
+      ],
+      "usedBy": ["blade-platform (rw)"],
+      "notes": ""
+    },
+    {
+      "name": "usagethreshold",
+      "model": "usagethresholds",
+      "database": "revex blade-platform standard DB (env MONGO_URL_BLADE_PLATFORM_STANDARD)",
+      "domain": "Config",
+      "purpose": "Wallet usage-threshold alert configurations per agency (threshold, frequency, alert level).",
+      "repo": "revex",
+      "path": "apps/blade-platform/src/NotificationConfig/schema/usage-threshold-config.schema.ts",
+      "line": 25,
+      "fields": [
+        { "name": "companyId", "type": "String" },
+        { "name": "configureForAll", "type": "Boolean" },
+        { "name": "locationIds", "type": "[String]" },
+        { "name": "threshold", "type": "Number" },
+        { "name": "frequency", "type": "String" },
+        { "name": "alertLevel", "type": "String" },
+        { "name": "alertType", "type": "String" },
+        { "name": "averageMultiplier", "type": "Number" },
+        { "name": "lastNotificationSentAt", "type": "Date" },
+        { "name": "enabled", "type": "Boolean" }
+      ],
+      "indexes": [
+        { "keys": { "companyId": 1 }, "options": {}, "declaredIn": ":102" },
+        { "keys": { "companyId": 1, "alertLevel": 1 }, "options": {}, "declaredIn": ":103" },
+        {
+          "keys": { "companyId": 1, "alertLevel": 1 },
+          "options": { "unique": true, "sparse": true },
+          "declaredIn": ":106 (conflicts with :103 same keys)"
+        }
+      ],
+      "usedBy": ["blade-platform (rw)"],
+      "notes": "Model name constant is 'usagethresholds' but explicit collection is 'usagethreshold' (explicit wins). {companyId,alertLevel} declared both non-unique and unique+sparse."
+    },
+    {
+      "name": "usagethresholdlookup",
+      "model": "UsageThresholdLookup",
+      "database": "revex blade-platform standard DB (env MONGO_URL_BLADE_PLATFORM_STANDARD)",
+      "domain": "Config",
+      "purpose": "Lookup from (company, location) to usage-threshold config.",
+      "repo": "revex",
+      "path": "apps/blade-platform/src/NotificationConfig/schema/usage-threshold-lookup.schema.ts",
+      "line": 4,
+      "fields": [
+        { "name": "companyId", "type": "String" },
+        { "name": "locationId", "type": "String" },
+        { "name": "usageThresholdConfig", "type": "ObjectId" }
+      ],
+      "indexes": [
+        { "keys": { "companyId": 1, "locationId": 1 }, "options": {}, "declaredIn": ":18" },
+        {
+          "keys": { "companyId": 1, "locationId": 1, "usageThresholdConfig": 1 },
+          "options": { "unique": true },
+          "declaredIn": ":19"
+        }
+      ],
+      "usedBy": ["blade-platform (declared, not registered in any MongooseModule.forFeature)"],
+      "notes": "Schema appears unused: UsageThresholdLookupSchema is not registered by any module at this commit."
+    },
+    {
+      "name": "walletnotificationauditlogs",
+      "model": "walletnotificationauditlogs",
+      "database": "revex blade-platform standard DB (env MONGO_URL_BLADE_PLATFORM_STANDARD)",
+      "domain": "Config",
+      "purpose": "Audit of every usage-threshold evaluation/notification (thresholds, usage, emails sent, rate limiting).",
+      "repo": "revex",
+      "path": "apps/blade-platform/src/NotificationConfig/schema/usage-threshold-config.schema.ts",
+      "line": 185,
+      "fields": [
+        { "name": "companyId", "type": "String" },
+        { "name": "locationId", "type": "String" },
+        { "name": "alertType", "type": "String" },
+        { "name": "alertMethod", "type": "String" },
+        { "name": "calculatedThreshold", "type": "Number" },
+        { "name": "currentUsage", "type": "Number" },
+        { "name": "frequency", "type": "String" },
+        { "name": "triggered", "type": "Boolean" },
+        { "name": "notificationSent", "type": "Boolean" },
+        { "name": "triggeredAt", "type": "Date" },
+        { "name": "sourceInstanceId", "type": "String" }
+      ],
+      "indexes": [
+        { "keys": { "companyId": 1 }, "options": {}, "declaredIn": "field :195" },
+        { "keys": { "locationId": 1 }, "options": {}, "declaredIn": "field :198" },
+        { "keys": { "alertType": 1 }, "options": {}, "declaredIn": "field :201" },
+        { "keys": { "frequency": 1 }, "options": {}, "declaredIn": "field :233" },
+        { "keys": { "triggered": 1 }, "options": {}, "declaredIn": "field :240" },
+        { "keys": { "notificationSent": 1 }, "options": {}, "declaredIn": "field :256" },
+        { "keys": { "triggeredAt": 1 }, "options": {}, "declaredIn": "field :348" },
+        {
+          "keys": {
+            "companyId": 1,
+            "alertType": 1,
+            "triggered": 1,
+            "notificationSent": 1,
+            "triggeredAt": -1
+          },
+          "options": {},
+          "declaredIn": ":372"
+        },
+        {
+          "keys": {
+            "companyId": 1,
+            "locationId": 1,
+            "alertType": 1,
+            "triggered": 1,
+            "notificationSent": 1,
+            "triggeredAt": -1
+          },
+          "options": {},
+          "declaredIn": ":381"
+        },
+        {
+          "keys": { "companyId": 1, "currentUsage": 1, "triggeredAt": -1 },
+          "options": {},
+          "declaredIn": ":391"
+        },
+        {
+          "keys": { "frequency": 1, "triggered": 1, "triggeredAt": -1 },
+          "options": {},
+          "declaredIn": ":398"
+        },
+        {
+          "keys": { "sourceInstanceId": 1, "triggeredAt": -1 },
+          "options": {},
+          "declaredIn": ":405"
+        },
+        {
+          "keys": {
+            "companyId": 1,
+            "rateLimitingContext.rateLimitingApplied": 1,
+            "triggeredAt": -1
+          },
+          "options": {},
+          "declaredIn": ":411"
+        },
+        { "keys": { "companyId": 1, "triggeredAt": -1 }, "options": {}, "declaredIn": ":418" },
+        {
+          "keys": { "alertType": 1, "triggered": 1, "triggeredAt": -1 },
+          "options": {},
+          "declaredIn": ":423"
+        }
+      ],
+      "usedBy": ["blade-platform (rw)"],
+      "notes": "No TTL — unbounded growth. sourceInstanceId described as 'for deduplication' but not unique. 15 indexes declared (heavy write amplification)."
+    },
+    {
+      "name": "uniqueinstances",
+      "model": "UniqueInstance",
+      "database": "revex blade-platform standard DB (env MONGO_URL_BLADE_PLATFORM_STANDARD)",
+      "domain": "Other",
+      "purpose": "Idempotency/lock registry: (collectionName, instanceId) claimed once per process (recharges, invoices, tax...).",
+      "repo": "revex",
+      "path": "apps/blade-platform/common/schema/uniqueInstance.schema.ts",
+      "line": 64,
+      "fields": [
+        { "name": "collectionName", "type": "String (CollectionNames enum)" },
+        { "name": "instanceId", "type": "String" },
+        { "name": "committed", "type": "Boolean" },
+        { "name": "eventBody", "type": "Mixed" },
+        { "name": "createdAt", "type": "Date" }
+      ],
+      "indexes": [
+        {
+          "keys": { "collectionName": 1, "instanceId": 1 },
+          "options": { "unique": true },
+          "declaredIn": ":85"
+        }
+      ],
+      "usedBy": ["blade-platform (rw)"],
+      "notes": "uniqueInstances.service.ts relies on E11000 from this index (lines 99,126,265,311)."
+    },
+    {
+      "name": "uniqueinstances",
+      "model": "UniqueInstances",
+      "database": "saas main DB (env SAAS_MONGO_URL, default mongoose connection)",
+      "domain": "Other",
+      "purpose": "saas-service idempotency registry (same pattern, saas main DB).",
+      "repo": "saas",
+      "path": "src/models/UniqueInstances.ts",
+      "line": 41,
+      "fields": [
+        { "name": "collectionName", "type": "String" },
+        { "name": "instanceId", "type": "String" },
+        { "name": "createdAt", "type": "Date" },
+        { "name": "updatedAt", "type": "Date" }
+      ],
+      "indexes": [
+        {
+          "keys": { "collectionName": 1, "instanceId": 1 },
+          "options": { "unique": true },
+          "declaredIn": ":48"
+        }
+      ],
+      "usedBy": ["saas-service (rw)"],
+      "notes": "autoIndex:false on this connection — index must exist out-of-band."
+    },
+    {
+      "name": "uniqueinstancehistory",
+      "model": "UniqueInstancesHistory",
+      "database": "saas main DB (env SAAS_MONGO_URL, default mongoose connection)",
+      "domain": "Other",
+      "purpose": "Historical copy of unique-instance claims, TTL 30d prod / 10d non-prod.",
+      "repo": "saas",
+      "path": "src/models/UniqueInstanceHistory.ts",
+      "line": 15,
+      "fields": [
+        { "name": "collectionName", "type": "String" },
+        { "name": "instanceId", "type": "String" },
+        { "name": "createdAt", "type": "Date" },
+        { "name": "updatedAt", "type": "Date" }
+      ],
+      "indexes": [
+        {
+          "keys": { "collectionName": 1, "instanceId": 1 },
+          "options": { "unique": true },
+          "declaredIn": ":23"
+        },
+        {
+          "keys": { "createdAt": 1 },
+          "options": { "expireAfterSeconds": "(isProdEnv() ? 30 : 10) * 86400" },
+          "declaredIn": ":24"
+        }
+      ],
+      "usedBy": ["saas-service (rw, rough)"],
+      "notes": "Explicit collection 'uniqueinstancehistory'."
+    },
+    {
+      "name": "changestreams",
+      "model": "ChangeStream",
+      "database": "revex blade-platform standard DB (saas env MONGO_URL_BLADE_PLATFORM_STANDARD)",
+      "domain": "Other",
+      "purpose": "Persisted change-stream resume tokens for saas wallet watchers.",
+      "repo": "saas",
+      "path": "src/models/ChangeStream.ts",
+      "line": 15,
+      "fields": [
+        { "name": "collectionName", "type": "String" },
+        { "name": "resumeToken", "type": "Mixed" },
+        { "name": "ops", "type": "Map" }
+      ],
+      "indexes": [
+        { "keys": { "collectionName": 1, "resumeToken": 1 }, "options": {}, "declaredIn": ":23" },
+        {
+          "keys": { "collectionName": 1, "unique": true },
+          "options": {},
+          "declaredIn": ":24 — malformed: `unique` placed inside keys"
+        }
+      ],
+      "usedBy": ["saas-service (rw)"],
+      "notes": "MALFORMED: index({collectionName:1, unique:true}) creates a compound index on a field literally named 'unique', not a unique constraint. One-doc-per-collectionName is not enforced."
+    },
+    {
+      "name": "locationmetadatas",
+      "model": "LocationMetadata",
+      "database": "saas standard DB (env MONGO_URL_SAAS_STANDARD)",
+      "domain": "Other",
+      "purpose": "SaaS-mode per-location metadata: Stripe customer, subscription, suspension, setup state.",
+      "repo": "saas",
+      "path": "src/models/LocationMetadata.ts",
+      "line": 95,
+      "fields": [
+        { "name": "locationId", "type": "String" },
+        { "name": "companyId", "type": "String" },
+        { "name": "suspendedInfo", "type": "Mixed" },
+        { "name": "saasMode", "type": "String" },
+        { "name": "subscriptionId", "type": "String" },
+        { "name": "stripeCustomerId", "type": "String" },
+        { "name": "stripeSubscriptionInfo", "type": "Mixed" },
+        { "name": "deleted", "type": "Boolean" },
+        { "name": "saasSetup", "type": "String" },
+        { "name": "userLimit", "type": "Number" }
+      ],
+      "indexes": [
+        { "keys": { "locationId": 1 }, "options": { "unique": true }, "declaredIn": ":130" },
+        { "keys": { "stripeCustomerId": 1 }, "options": {}, "declaredIn": ":131" },
+        {
+          "keys": { "companyId": 1, "suspendedInfo.restricted": 1 },
+          "options": {},
+          "declaredIn": ":132"
+        }
+      ],
+      "usedBy": ["saas-service (rw)"],
+      "notes": "Collection name by mongoose pluralization of 'LocationMetadata' -> 'locationmetadatas' (no explicit collection; verify in prod)."
+    },
+    {
+      "name": "gatekeeper_event_metadata",
+      "model": "GatekeeperEventMetadata",
+      "database": "revex blade-platform standard DB (gatekeeper MONGO_URL, falls back to MONGO_URL_BLADE_PLATFORM_STANDARD)",
+      "domain": "Gatekeeper",
+      "purpose": "Durable per-event state for wallet gatekeeper reserve/settle (counter + Bill API states), with DEVELOPER discriminator.",
+      "repo": "revex",
+      "path": "apps/revex-wallet-gatekeeper/src/repositories/schemas/eventMetadata.schema.ts",
+      "line": 68,
+      "fields": [
+        { "name": "_id", "type": "String" },
+        { "name": "eventId", "type": "String" },
+        { "name": "chargeId", "type": "String" },
+        { "name": "companyId", "type": "String" },
+        { "name": "entityLevel", "type": "String (discriminator)" },
+        { "name": "reservations", "type": "Array" },
+        { "name": "counterState", "type": "String" },
+        { "name": "billApiState", "type": "String" },
+        { "name": "retryCount", "type": "Number" },
+        { "name": "ttlAt", "type": "Date" },
+        { "name": "developerTeamId", "type": "String (DEVELOPER only)" }
+      ],
+      "indexes": [
+        { "keys": { "eventId": 1 }, "options": { "unique": true }, "declaredIn": ":195" },
+        { "keys": { "chargeId": 1 }, "options": { "unique": true }, "declaredIn": ":196" },
+        { "keys": { "counterState": 1, "billApiState": 1 }, "options": {}, "declaredIn": ":197" },
+        { "keys": { "ttlAt": 1 }, "options": { "expireAfterSeconds": 0 }, "declaredIn": ":199" }
+      ],
+      "usedBy": ["revex-wallet-gatekeeper (rw)"],
+      "notes": "eventBacking.service.ts:322 / developerEventBacking.service.ts:239 rely on E11000. {companyId:1} is created only in test/e2eApp.ts:180, not declared in schema. Discriminator DeveloperEventMetadata registered in repository.module.ts."
+    },
+    {
+      "name": "gatekeeper_policy_counter",
+      "model": "GatekeeperPolicyCounter",
+      "database": "revex blade-platform standard DB (gatekeeper MONGO_URL, falls back to MONGO_URL_BLADE_PLATFORM_STANDARD)",
+      "domain": "Gatekeeper",
+      "purpose": "Durable usage counters per policy version and metering type.",
+      "repo": "revex",
+      "path": "apps/revex-wallet-gatekeeper/src/repositories/schemas/policyCounter.schema.ts",
+      "line": 27,
+      "fields": [
+        { "name": "_id", "type": "String (<identity>:v<ver>:<meteringType>)" },
+        { "name": "entityId", "type": "String" },
+        { "name": "policyVersion", "type": "Number" },
+        { "name": "meteringType", "type": "String" },
+        { "name": "used", "type": "Number" },
+        { "name": "freeUsage", "type": "Number" },
+        { "name": "nonFreeUsage", "type": "Number" },
+        { "name": "isCurrent", "type": "Boolean" },
+        { "name": "deleted", "type": "Boolean" }
+      ],
+      "indexes": [
+        { "keys": { "entityId": 1, "policyVersion": 1 }, "options": {}, "declaredIn": ":76" },
+        { "keys": { "entityId": 1, "isCurrent": 1 }, "options": {}, "declaredIn": ":77" },
+        { "keys": { "isCurrent": 1 }, "options": {}, "declaredIn": ":78" }
+      ],
+      "usedBy": ["revex-wallet-gatekeeper (rw)"],
+      "notes": "Uniqueness via deterministic _id. 'Only one isCurrent:true per entity' is an invariant not enforced by a unique index."
+    },
+    {
+      "name": "gatekeeper_policy_schema",
+      "model": "GatekeeperPolicy",
+      "database": "revex blade-platform standard DB (gatekeeper MONGO_URL, falls back to MONGO_URL_BLADE_PLATFORM_STANDARD)",
+      "domain": "Gatekeeper",
+      "purpose": "Materialized enforcement policies per entity/product/version (evaluators, tiers, actions).",
+      "repo": "revex",
+      "path": "apps/revex-wallet-gatekeeper/src/repositories/schemas/policySchema.schema.ts",
+      "line": 145,
+      "fields": [
+        { "name": "_id", "type": "String" },
+        { "name": "entityType", "type": "String" },
+        { "name": "entityId", "type": "String" },
+        { "name": "product", "type": "String" },
+        { "name": "subProduct", "type": "String" },
+        { "name": "source", "type": "String" },
+        { "name": "status", "type": "String" },
+        { "name": "policyVersion", "type": "Number" },
+        { "name": "startDate", "type": "Date" },
+        { "name": "endDate", "type": "Date" },
+        { "name": "evaluators", "type": "Array" },
+        { "name": "tiers", "type": "Array" }
+      ],
+      "indexes": [
+        {
+          "keys": {
+            "entityType": 1,
+            "entityId": 1,
+            "product": 1,
+            "subProduct": 1,
+            "source": 1,
+            "status": 1
+          },
+          "options": { "name": "gk_policy_scope_status" },
+          "declaredIn": ":259"
+        },
+        { "keys": { "status": 1, "endDate": 1 }, "options": {}, "declaredIn": ":263" }
+      ],
+      "usedBy": ["revex-wallet-gatekeeper (rw)"],
+      "notes": "'One ACTIVE doc per scope' is enforced via deterministic _id + E11000 race handling (services/policyWindow.ts:89), not by a unique scope index."
+    },
+    {
+      "name": "gatekeeper_policy_template",
+      "model": "GatekeeperPolicyTemplate",
+      "database": "revex blade-platform standard DB (gatekeeper MONGO_URL, falls back to MONGO_URL_BLADE_PLATFORM_STANDARD)",
+      "domain": "Gatekeeper",
+      "purpose": "Policy template blueprints per plan (SAAS_PLAN/INFRA_PLAN) materialized into policies.",
+      "repo": "revex",
+      "path": "apps/revex-wallet-gatekeeper/src/repositories/schemas/policyTemplate.schema.ts",
+      "line": 69,
+      "fields": [
+        { "name": "_id", "type": "String" },
+        { "name": "entityType", "type": "String" },
+        { "name": "entityId", "type": "String" },
+        { "name": "companyId", "type": "String" },
+        { "name": "planId", "type": "String" },
+        { "name": "source", "type": "String" },
+        { "name": "product", "type": "String" },
+        { "name": "subProduct", "type": "String" },
+        { "name": "status", "type": "String" },
+        { "name": "tiers", "type": "Array" },
+        { "name": "version", "type": "Number" }
+      ],
+      "indexes": [
+        {
+          "keys": { "product": 1, "subProduct": 1, "status": 1 },
+          "options": {},
+          "declaredIn": ":174"
+        },
+        {
+          "keys": { "companyId": 1, "product": 1, "subProduct": 1, "status": 1 },
+          "options": {},
+          "declaredIn": ":175"
+        },
+        { "keys": { "source": 1, "status": 1 }, "options": {}, "declaredIn": ":182" }
+      ],
+      "usedBy": ["revex-wallet-gatekeeper (rw)"],
+      "notes": "Uniqueness per plan via _id."
+    },
+    {
+      "name": "gatekeeper_policy_evaluator",
+      "model": "GatekeeperPolicyEvaluator",
+      "database": "revex blade-platform standard DB (gatekeeper MONGO_URL, falls back to MONGO_URL_BLADE_PLATFORM_STANDARD)",
+      "domain": "Gatekeeper",
+      "purpose": "Registry of evaluator types (hydrates, reason codes, field schema).",
+      "repo": "revex",
+      "path": "apps/revex-wallet-gatekeeper/src/repositories/schemas/policyEvaluator.schema.ts",
+      "line": 15,
+      "fields": [
+        { "name": "_id", "type": "String" },
+        { "name": "type", "type": "String" },
+        { "name": "surface", "type": "String" },
+        { "name": "hydrates", "type": "[String]" },
+        { "name": "reasonCodes", "type": "[String]" },
+        { "name": "fieldsSchema", "type": "Object" },
+        { "name": "status", "type": "String" },
+        { "name": "revision", "type": "Number" }
+      ],
+      "indexes": [{ "keys": { "surface": 1, "status": 1 }, "options": {}, "declaredIn": ":61" }],
+      "usedBy": ["revex-wallet-gatekeeper (rw)"],
+      "notes": ""
+    }
+  ]
+}

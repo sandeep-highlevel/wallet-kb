@@ -1,0 +1,803 @@
+{
+  "repos": {
+    "revex-stripe-recon": {
+      "name": "ghl-revex-backend (feat/stripe-wallet-reconciliation)",
+      "url": "https://github.com/GoHighLevel/ghl-revex-backend",
+      "ref": "a6f66c190bbb7f5558232e30dec5a4eed0c1645c",
+      "note": "unmerged"
+    },
+    "revex-ledger-recon": {
+      "name": "ghl-revex-backend (Feat/ledger-daily-recon-slack)",
+      "url": "https://github.com/GoHighLevel/ghl-revex-backend",
+      "ref": "fe8c2c52dd8103c737dd0be6a3b8c61f18fcc17e",
+      "note": "unmerged"
+    },
+    "platform-backend-ledger-recon": {
+      "name": "platform-backend (feat/blade-platform-ledger-daily-recon-cron)",
+      "url": "https://github.com/GoHighLevel/platform-backend",
+      "ref": "1a45088c7df308326c1310aa52dfb0bdfe810300",
+      "note": "unmerged"
+    }
+  },
+  "controls": [
+    {
+      "id": "stripe-webhook-signature",
+      "name": "Stripe webhook signature check (sub-account)",
+      "hop": "Funding",
+      "objective": "Existence",
+      "type": "Preventive",
+      "automation": "Automated",
+      "status": "Live",
+      "description": "/consume-webhooks verifies the stripe-signature header against the raw body (constructEventFromPayload) before fanning the event out to Pub/Sub.",
+      "refs": [
+        {
+          "repo": "revex",
+          "path": "apps/stripe-consumer/src/consumer/stripe-consumer.controller.ts",
+          "line": 24,
+          "label": "constructEventFromPayload"
+        }
+      ],
+      "weakness": "The sibling /consume-agency-webhooks route, which carries wallet-recharge PaymentIntents, accepts the body without a signature check (line 35)."
+    },
+    {
+      "id": "recharge-webhook-metadata-validation",
+      "name": "Recharge webhook metadata and status gate",
+      "hop": "Funding",
+      "objective": "Validity",
+      "type": "Preventive",
+      "automation": "Automated",
+      "status": "Live",
+      "description": "handleAgencyWebhook only acts on payment_intent.succeeded with PI status 'succeeded', a positive finite metadata amount and matching companyId/entityId (or walletId for auto recharge); otherwise INVALID_METADATA.",
+      "refs": [
+        {
+          "repo": "revex",
+          "path": "apps/blade-platform/src/WalletRecharge/rechargeTransaction.service.ts",
+          "line": 1622,
+          "label": "succeeded-only filter"
+        },
+        {
+          "repo": "revex",
+          "path": "apps/blade-platform/src/WalletRecharge/rechargeTransaction.service.ts",
+          "line": 1669,
+          "label": "amount + metadata validation"
+        },
+        {
+          "repo": "revex",
+          "path": "apps/blade-platform/src/WalletRecharge/rechargeTransaction.service.ts",
+          "line": 1685,
+          "label": "INVALID_METADATA reject"
+        }
+      ],
+      "weakness": "The credited amount is metadata.amount; it is never compared with paymentIntent.amount_received, so a $10 charge is not proven to credit exactly $10."
+    },
+    {
+      "id": "recharge-credit-dedupe-by-pi",
+      "name": "One wallet credit per PaymentIntent",
+      "hop": "Funding",
+      "objective": "Accuracy",
+      "type": "Preventive",
+      "automation": "Automated",
+      "status": "Live",
+      "description": "The webhook path and the credit writer both look up an existing Stripe_Payment wallet txn with chargeId = PaymentIntent id, so a redelivered event is acked without a second credit.",
+      "refs": [
+        {
+          "repo": "revex",
+          "path": "apps/blade-platform/src/WalletRecharge/rechargeTransaction.service.ts",
+          "line": 1692,
+          "label": "webhook txn-exists check"
+        },
+        {
+          "repo": "revex",
+          "path": "apps/blade-platform/src/WalletRecharge/rechargeTransaction.service.ts",
+          "line": 771,
+          "label": "credit writer txn-exists check"
+        },
+        {
+          "repo": "revex",
+          "path": "apps/blade-platform/src/WalletRecharge/rechargeTransaction.service.ts",
+          "line": 1901,
+          "label": "developer wallet 11000 on (team, chargeId)"
+        }
+      ],
+      "weakness": "Agency/location wallets rely on read-then-write under a Redis lock; no unique Mongo index on chargeId is declared."
+    },
+    {
+      "id": "wallet-recharge-locks",
+      "name": "walletRechargeLocks single-flight lock",
+      "hop": "Funding",
+      "objective": "Accuracy",
+      "type": "Preventive",
+      "automation": "Automated",
+      "status": "Live",
+      "description": "A unique (entityId, entityType) document with a 15-minute TTL stops concurrent auto-recharges and makes webhook credits nack-and-retry while a recharge is in flight.",
+      "refs": [
+        {
+          "repo": "revex",
+          "path": "apps/blade-platform/src/WalletRecharge/walletRechargeLock.schema.ts",
+          "line": 35,
+          "label": "unique index"
+        },
+        {
+          "repo": "revex",
+          "path": "apps/blade-platform/src/WalletRecharge/walletRecharge.service.ts",
+          "line": 1219,
+          "label": "auto-recharge lock acquire"
+        },
+        {
+          "repo": "revex",
+          "path": "apps/blade-platform/src/WalletRecharge/rechargeTransaction.service.ts",
+          "line": 1714,
+          "label": "webhook lock check"
+        }
+      ],
+      "weakness": "Agency PaymentIntent creation sends no Stripe idempotency key, so a lock that lapses mid-flight could allow a second charge."
+    },
+    {
+      "id": "recharge-credit-amount-guard-and-redlock",
+      "name": "Positive-amount guard and wallet lock on credit",
+      "hop": "Funding",
+      "objective": "Integrity",
+      "type": "Preventive",
+      "automation": "Automated",
+      "status": "Live",
+      "description": "createTransactionForRecharge rejects credits of 0 or less (FALSE_CREDIT), locks the wallet in Redis and writes the credit inside a Mongo session transaction.",
+      "refs": [
+        {
+          "repo": "revex",
+          "path": "apps/blade-platform/src/WalletRecharge/rechargeTransaction.service.ts",
+          "line": 728,
+          "label": "FALSE_CREDIT guard"
+        },
+        {
+          "repo": "revex",
+          "path": "apps/blade-platform/src/WalletRecharge/rechargeTransaction.service.ts",
+          "line": 750,
+          "label": "lockWallet"
+        }
+      ]
+    },
+    {
+      "id": "recharge-failure-logs",
+      "name": "rechargefailurelogs failure trail",
+      "hop": "Funding",
+      "objective": "Completeness",
+      "type": "Detective",
+      "automation": "Automated",
+      "status": "Live",
+      "description": "Failed manual, auto and ACH recharges are logged with gateway and decline codes and feed the recharge-failure dashboards.",
+      "refs": [
+        {
+          "repo": "revex",
+          "path": "apps/blade-platform/src/WalletRecharge/rechargeFailureLog/rechargeFailureLog.schema.ts",
+          "line": 14,
+          "label": "collection"
+        },
+        {
+          "repo": "revex",
+          "path": "apps/blade-platform/src/CompanyWallet/companyWallet.service.ts",
+          "line": 3336,
+          "label": "ACH failure writer"
+        }
+      ],
+      "weakness": "Records failures only; a succeeded Stripe charge that never reaches the wallet leaves no row."
+    },
+    {
+      "id": "bill-api-eventid-dedupe",
+      "name": "Bill API eventId idempotency",
+      "hop": "Charging",
+      "objective": "Accuracy",
+      "type": "Preventive",
+      "automation": "Automated",
+      "status": "Live",
+      "description": "The billing controller rejects an eventId already in chargeV5 with 422 ALREADY_PROCESSED; the charge worker re-checks and treats Mongo 11000 as already processed.",
+      "refs": [
+        {
+          "repo": "revex",
+          "path": "apps/billing/src/controllers/billing.controller.ts",
+          "line": 97,
+          "label": "v2 eventId lookup"
+        },
+        {
+          "repo": "revex",
+          "path": "apps/billing/src/controllers/billing.controller.ts",
+          "line": 228,
+          "label": "v1 eventId lookup"
+        },
+        {
+          "repo": "revex",
+          "path": "apps/blade-platform/src/Charge/chargeCreation.service.ts",
+          "line": 211,
+          "label": "11000 handled"
+        }
+      ],
+      "weakness": "No unique index on chargeV5.eventId is declared in code, so the 11000 path depends on an index created outside the repo."
+    },
+    {
+      "id": "funds-check-before-charge",
+      "name": "Funds and wallet-active check before charge",
+      "hop": "Charging",
+      "objective": "Authorization",
+      "type": "Preventive",
+      "automation": "Automated",
+      "status": "Live",
+      "description": "checkFunds/checkFundsV2 return FUND_CHECK_FAILED for a missing or INACTIVE wallet, or one with no complimentary credits and a negative balance.",
+      "refs": [
+        {
+          "repo": "revex",
+          "path": "apps/billing/src/services/billing.service.ts",
+          "line": 313,
+          "label": "checkFunds"
+        },
+        {
+          "repo": "revex",
+          "path": "apps/billing/src/services/companyWallet.service.ts",
+          "line": 209,
+          "label": "hasFunds rule"
+        }
+      ],
+      "weakness": "The rule is balance >= 0, not balance >= charge, so any single charge can take the wallet negative by design."
+    },
+    {
+      "id": "gatekeeper-reserve-and-trueup",
+      "name": "Gatekeeper reservation, dedupe and true-up",
+      "hop": "Charging",
+      "objective": "Accuracy",
+      "type": "Preventive",
+      "automation": "Automated",
+      "status": "Live",
+      "description": "Usage is reserved in Redis before work runs (unique eventId/chargeId), trued up against the billed amount at settle, and 5xx Bill API failures are parked for a retry sweep.",
+      "refs": [
+        {
+          "repo": "revex",
+          "path": "apps/revex-wallet-gatekeeper/src/repositories/schemas/eventMetadata.schema.ts",
+          "line": 195,
+          "label": "unique eventId/chargeId"
+        },
+        {
+          "repo": "revex",
+          "path": "apps/revex-wallet-gatekeeper/src/services/event.service.ts",
+          "line": 1098,
+          "label": "reserve"
+        },
+        {
+          "repo": "revex",
+          "path": "apps/revex-wallet-gatekeeper/src/scheduler/billRetry.scheduler.ts",
+          "line": 141,
+          "label": "bill-retry sweep"
+        }
+      ],
+      "weakness": "Evaluate and reserve are not atomic, so concurrent requests can overshoot a hard limit or free allowance."
+    },
+    {
+      "id": "charge-and-debit-atomic",
+      "name": "Charge and wallet debit in one transaction",
+      "hop": "Charging",
+      "objective": "Integrity",
+      "type": "Preventive",
+      "automation": "Automated",
+      "status": "Live",
+      "description": "The PENDING wallet debit and the chargeV5 document are written in one Mongo session, so neither exists without the other.",
+      "refs": [
+        {
+          "repo": "revex",
+          "path": "apps/blade-platform/src/Charge/chargeCreation.service.ts",
+          "line": 441,
+          "label": "pending debit txn"
+        },
+        {
+          "repo": "revex",
+          "path": "apps/blade-platform/src/Charge/chargeCreation.service.ts",
+          "line": 453,
+          "label": "commit"
+        }
+      ]
+    },
+    {
+      "id": "baas-config-change-log",
+      "name": "BaaS / rebilling config change log",
+      "hop": "Charging",
+      "objective": "Authorization",
+      "type": "Detective",
+      "automation": "Automated",
+      "status": "Live",
+      "description": "BaaS billing-config changes append to a per-entity logs array in baaslogs; rebillingconfigs records lastUpdatedBy.",
+      "refs": [
+        {
+          "repo": "revex",
+          "path": "apps/billing/src/services/baasConfig.service.ts",
+          "line": 886,
+          "label": "insertIntoBaasLogs"
+        },
+        {
+          "repo": "revex",
+          "path": "apps/billing/src/models/rebillingConfig.schema.ts",
+          "line": 42,
+          "label": "lastUpdatedBy"
+        }
+      ],
+      "weakness": "The log array is schemaless, with no enforced actor or reason fields."
+    },
+    {
+      "id": "provider-cost-capture",
+      "name": "Provider cost captured on charge",
+      "hop": "Charging",
+      "objective": "Accuracy",
+      "type": "Detective",
+      "automation": "Partial",
+      "status": "Live",
+      "description": "Producers may send cost on the bill request; it is stored on chargeV5.cost and forwarded as vendorCost on the GL transfer (used for Twilio margin).",
+      "refs": [
+        {
+          "repo": "revex",
+          "path": "apps/billing/src/controllers/dtos/billing.dto.ts",
+          "line": 79,
+          "label": "optional cost"
+        },
+        {
+          "repo": "revex",
+          "path": "apps/billing/src/models/charge.schema.ts",
+          "line": 84,
+          "label": "cost field"
+        },
+        {
+          "repo": "revex",
+          "path": "apps/blade-platform/src/Charge/chargeCreation.service.ts",
+          "line": 369,
+          "label": "vendorCost to GL"
+        }
+      ],
+      "weakness": "Optional and producer-supplied; not reconciled to provider invoices, and no Meta/WhatsApp or Mailgun cost fields were found."
+    },
+    {
+      "id": "sms-rebill-backbilling-job",
+      "name": "SMS rebill back-billing job",
+      "hop": "Charging",
+      "objective": "Completeness",
+      "type": "Detective",
+      "automation": "Manual",
+      "status": "Live",
+      "description": "A script reads SMSRebillAuditLogs, checks blade for an existing charge per message, and bills only unbilled ones (dry-run by default).",
+      "refs": [
+        {
+          "repo": "revex",
+          "path": "scripts/lcPhone/rebillSmsAuditLogs/job.ts",
+          "line": 48,
+          "label": "source collection"
+        },
+        {
+          "repo": "revex",
+          "path": "scripts/lcPhone/rebillSmsAuditLogs/job.ts",
+          "line": 87,
+          "label": "dry-run default"
+        }
+      ],
+      "weakness": "Operator-run, not scheduled, no alerting."
+    },
+    {
+      "id": "settlement-wallet-lock",
+      "name": "Wallet lock during pending settlement",
+      "hop": "Settlement",
+      "objective": "Integrity",
+      "type": "Preventive",
+      "automation": "Automated",
+      "status": "Live",
+      "description": "Pending txns settle under a 600-second Redis wallet lock inside a DB transaction, stamping prevWalletBalance/walletBalance on each txn.",
+      "refs": [
+        {
+          "repo": "revex",
+          "path": "apps/blade-platform/workers/helper/wallet-worker/pendingSettlement.service.ts",
+          "line": 69,
+          "label": "lockWallet 600s"
+        },
+        {
+          "repo": "revex",
+          "path": "apps/blade-platform/workers/helper/wallet-worker/pendingSettlement.processor.ts",
+          "line": 132,
+          "label": "lock + transaction"
+        },
+        {
+          "repo": "revex",
+          "path": "apps/blade-platform/workers/helper/wallet-worker/pendingSettlementCalculator.ts",
+          "line": 101,
+          "label": "prev/after balance"
+        }
+      ]
+    },
+    {
+      "id": "pending-settlement-daily-sweep",
+      "name": "Daily pending-settlement sweep",
+      "hop": "Settlement",
+      "objective": "Cutoff",
+      "type": "Detective",
+      "automation": "Automated",
+      "status": "Live",
+      "description": "Crons at 01:30 UTC (company) and 02:30 UTC (location) re-dispatch every wallet with PENDING txns, catching missed event-driven settlements.",
+      "refs": [
+        {
+          "repo": "revex",
+          "path": "apps/blade-platform/deployments/production/k8s.cron.yaml",
+          "line": 10,
+          "label": "company cron"
+        },
+        {
+          "repo": "revex",
+          "path": "apps/blade-platform/deployments/production/k8s.cron.yaml",
+          "line": 55,
+          "label": "location cron"
+        }
+      ],
+      "weakness": "Re-settles silently; it does not report or alert on how many txns were stale."
+    },
+    {
+      "id": "refund-cap-and-lock",
+      "name": "Refund cap and wallet lock",
+      "hop": "Refunds & adjustments",
+      "objective": "Accuracy",
+      "type": "Preventive",
+      "automation": "Automated",
+      "status": "Live",
+      "description": "Wallet refunds are capped at currentBalance minus rechargeThresholdBalance and processed under a Redis wallet lock that fails safe.",
+      "refs": [
+        {
+          "repo": "revex",
+          "path": "apps/blade-platform/src/Refund/refund.service.ts",
+          "line": 1128,
+          "label": "max refundable"
+        },
+        {
+          "repo": "revex",
+          "path": "apps/blade-platform/src/Refund/refund.service.ts",
+          "line": 1230,
+          "label": "lockWallet"
+        }
+      ]
+    },
+    {
+      "id": "support-adjustment-authz-audit",
+      "name": "Support credit/debit authorization and audit",
+      "hop": "Refunds & adjustments",
+      "objective": "Authorization",
+      "type": "Preventive",
+      "automation": "Partial",
+      "status": "Live",
+      "description": "Support credits are allowed only from the support-portal workload, need a ticketNo deduped per ticket+entity, and are logged with performedBy, amount and product.",
+      "refs": [
+        {
+          "repo": "revex",
+          "path": "apps/blade-platform/src/guards/can-credit-wallet.guard.ts",
+          "line": 14,
+          "label": "workload allow-list"
+        },
+        {
+          "repo": "revex",
+          "path": "apps/blade-platform/src/transactions/transactions.service.ts",
+          "line": 816,
+          "label": "ticket dedupe"
+        },
+        {
+          "repo": "revex",
+          "path": "apps/blade-platform/src/transactions/walletCreditRefundSettlementLog.schema.ts",
+          "line": 57,
+          "label": "unique ticketNumber"
+        }
+      ],
+      "weakness": "No amount limit or second approver; performedBy can fall back to 'support_portal', and temp-refund-script credits wallets without this guard."
+    },
+    {
+      "id": "tigerbeetle-double-entry-idempotent",
+      "name": "TigerBeetle double entry with idempotent ids",
+      "hop": "Ledger",
+      "objective": "Accuracy",
+      "type": "Preventive",
+      "automation": "Automated",
+      "status": "Live",
+      "description": "Ledger events post as linked debit/credit chains; UW and GL transfer ids derive from the Mongo chargeId, and 'exists' results are treated as replays.",
+      "refs": [
+        {
+          "repo": "revex",
+          "path": "apps/ledger/src/transfers/transfers.service.ts",
+          "line": 501,
+          "label": "UW id from chargeId"
+        },
+        {
+          "repo": "revex",
+          "path": "apps/ledger/src/transfers/transfers.service.ts",
+          "line": 739,
+          "label": "GL id from chargeId"
+        },
+        {
+          "repo": "revex",
+          "path": "apps/ledger/workers/revex-ledger-worker.ts",
+          "line": 91,
+          "label": "idempotent TB errors"
+        }
+      ],
+      "weakness": "The legacy wallet path uses a random id unless transferDId is supplied (transfers.service.ts:417), so its replays are not idempotent."
+    },
+    {
+      "id": "ledger-payload-validation",
+      "name": "Ledger transfer payload validation",
+      "hop": "Ledger",
+      "objective": "Validity",
+      "type": "Preventive",
+      "automation": "Automated",
+      "status": "Live",
+      "description": "PL, UW and GL payloads must carry eventCode, entityId and amount (plus chargeId and productCode for UW); recharges must carry stripeFee.",
+      "refs": [
+        {
+          "repo": "revex",
+          "path": "apps/ledger/src/transfers/transfer.validation.ts",
+          "line": 85,
+          "label": "chargeId required"
+        },
+        {
+          "repo": "revex",
+          "path": "apps/ledger/src/transfers/transfer.validation.ts",
+          "line": 97,
+          "label": "stripeFee required"
+        }
+      ],
+      "weakness": "Invalid messages are acked and dropped, not dead-lettered."
+    },
+    {
+      "id": "ledger-balance-range-query",
+      "name": "Ledger agency-main balance query",
+      "hop": "Ledger",
+      "objective": "Accuracy",
+      "type": "Detective",
+      "automation": "Manual",
+      "status": "Live",
+      "description": "GET reconciliation/agencyMainBalance returns opening/closing TigerBeetle balances and the delta for a time range, used for manual tie-outs.",
+      "refs": [
+        {
+          "repo": "revex",
+          "path": "apps/ledger/src/ledger.controller.ts",
+          "line": 567,
+          "label": "endpoint"
+        },
+        {
+          "repo": "revex",
+          "path": "apps/ledger/src/ledger.service.ts",
+          "line": 2287,
+          "label": "range query"
+        }
+      ],
+      "weakness": "On demand only; nothing compares it with Mongo automatically."
+    },
+    {
+      "id": "spend-anomaly-detection",
+      "name": "Spend anomaly detection",
+      "hop": "Reconciliation",
+      "objective": "Validity",
+      "type": "Detective",
+      "automation": "Automated",
+      "status": "Live",
+      "description": "Each settlement compares today's debit count and amount per wallet with a baseline (modified z-score); anomalies go to transaction-anomalies and Slack with a cooldown.",
+      "refs": [
+        {
+          "repo": "revex",
+          "path": "apps/blade-platform/src/Analytics/anomaly-detection.service.ts",
+          "line": 256,
+          "label": "detectAndReport"
+        },
+        {
+          "repo": "revex",
+          "path": "apps/blade-platform/src/Analytics/transaction-anomaly.service.ts",
+          "line": 47,
+          "label": "writes anomalies"
+        }
+      ],
+      "weakness": "Flags unusual spend, not book errors; it does not reconcile balances or amounts."
+    },
+    {
+      "id": "stripe-wallet-daily-recon",
+      "name": "Daily Stripe vs wallet reconciliation",
+      "hop": "Reconciliation",
+      "objective": "Completeness",
+      "type": "Detective",
+      "automation": "Automated",
+      "status": "In progress",
+      "description": "Pulls one Stripe UTC day into ClickHouse and matches recharges to wallet credits by PaymentIntent: missing in wallet, missing in Stripe, amount mismatch over $0.005, and credits with no GL transfer, posted to Slack.",
+      "refs": [
+        {
+          "repo": "revex-stripe-recon",
+          "path": "apps/blade-platform/src/StripeRecon/stripeRecon.service.ts",
+          "line": 71,
+          "label": "runDaily"
+        },
+        {
+          "repo": "revex-stripe-recon",
+          "path": "apps/blade-platform/common/services/data-gateway/stripe-recon/stripeReconStore.service.ts",
+          "line": 184,
+          "label": "amount tolerance"
+        }
+      ],
+      "weakness": "Behind feature flags that default off, and not scheduled in production yet."
+    },
+    {
+      "id": "ledger-daily-recon",
+      "name": "Daily wallet vs GL ledger reconciliation",
+      "hop": "Reconciliation",
+      "objective": "Completeness",
+      "type": "Detective",
+      "automation": "Automated",
+      "status": "In progress",
+      "description": "Compares non-rebilled company wallet debits (Mongo CDC in ClickHouse) with GL TigerBeetle transfers by chargeId, lists missing and ledger-only charges, posts to Slack.",
+      "refs": [
+        {
+          "repo": "revex-ledger-recon",
+          "path": "apps/blade-platform/src/LedgerRecon/ledgerRecon.service.ts",
+          "line": 70,
+          "label": "runDaily"
+        },
+        {
+          "repo": "revex-ledger-recon",
+          "path": "apps/blade-platform/common/services/data-gateway/ledger-recon/ledgerReconGateway.service.ts",
+          "line": 56,
+          "label": "daily summary"
+        },
+        {
+          "repo": "platform-backend-ledger-recon",
+          "path": "crons/deployments/production/k8s.blade-platform-ledger-daily-recon-cron.yaml",
+          "line": 10,
+          "label": "prod cron 05:30 UTC"
+        }
+      ],
+      "weakness": "Presence-only: a ledger transfer with the wrong amount for a valid chargeId would pass."
+    }
+  ],
+  "gaps": [
+    {
+      "id": "agency-webhook-unsigned",
+      "title": "Agency Stripe webhook route has no signature check in code",
+      "hop": "Funding",
+      "impact": "The route that delivers wallet-recharge PaymentIntents trusts the request body; whether ingress restricts who can reach it is not visible in this repo and needs confirming.",
+      "evidence": "apps/stripe-consumer/src/consumer/stripe-consumer.controller.ts:35-41 takes @Body() directly; both routes are in excludedEndpoints (common/app-config/index.ts STRIPE_CONSUMER).",
+      "severity": "High"
+    },
+    {
+      "id": "recharge-amount-not-matched",
+      "title": "Credited amount not tied to Stripe amount received",
+      "hop": "Funding",
+      "impact": "If PaymentIntent metadata.amount differs from what Stripe captured, the wallet gets the metadata value and nothing flags it in real time.",
+      "evidence": "rechargeTransaction.service.ts:1669 uses Number(metadata.amount); amount_received is not compared on the agency path.",
+      "severity": "High"
+    },
+    {
+      "id": "no-balance-rollforward",
+      "title": "No balance vs sum-of-transactions check",
+      "hop": "Reconciliation",
+      "impact": "Drift between a wallet's stored balance and its transaction history (lost update, manual edit) would go undetected.",
+      "evidence": "No roll-forward or balance-mismatch logic in apps/ at the pinned SHA; only per-txn prev/after balances (pendingSettlementCalculator.ts:101).",
+      "severity": "High"
+    },
+    {
+      "id": "recon-not-in-production",
+      "title": "Stripe and ledger reconciliations not live",
+      "hop": "Reconciliation",
+      "impact": "There is no automated daily proof that Stripe money in equals wallet credits, or that wallet debits equal ledger postings.",
+      "evidence": "Both are on unmerged branches; the Stripe recon has no production schedule and its flags default off.",
+      "severity": "High"
+    },
+    {
+      "id": "support-adjustment-weak-authz",
+      "title": "Support adjustments lack maker-checker",
+      "hop": "Refunds & adjustments",
+      "impact": "One support-portal caller can credit any amount without a second approval; temp-refund-script and bulk-update-wallets skip the credit guard.",
+      "evidence": "support.controller.ts:133 (performedBy fallback), :398 (temp-refund-script, no route guard); transaction.controller.ts:39-41.",
+      "severity": "High"
+    },
+    {
+      "id": "stripe-payout-recon-missing",
+      "title": "No reconciliation of Stripe payouts",
+      "hop": "Reconciliation",
+      "impact": "Nothing matches Stripe charges to the payouts that reach the bank, so the cash leg of order-to-cash is unproven.",
+      "evidence": "No payout handling at the pinned SHA (GL payout accounts are commented out in apps/ledger/src/accounts/common.const.ts:453). The stripe-recon branch loads payouts into ClickHouse (stripeReconStore.service.ts:115) but only lists them as informational (:250).",
+      "severity": "High"
+    },
+    {
+      "id": "ledger-silent-drops",
+      "title": "Ledger postings can be skipped silently",
+      "hop": "Ledger",
+      "impact": "Wallet activity can be missing from TigerBeetle with only a log line: invalid payloads acked, no-glCode charges skipped, canary gate, post-commit publish failures.",
+      "evidence": "revex-ledger-worker.ts:319-329; chargeCreation.service.ts:340-345, :485; ledgerCanary.helper.ts:115.",
+      "severity": "Medium"
+    },
+    {
+      "id": "stripe-consumer-no-event-dedupe",
+      "title": "No Stripe event.id dedupe at the consumer",
+      "hop": "Funding",
+      "impact": "Every Stripe redelivery is re-published to all topics, so correctness relies on each downstream consumer's own dedupe.",
+      "evidence": "apps/stripe-consumer/src/consumer/stripe-consumer.service.ts:16-68.",
+      "severity": "Medium"
+    },
+    {
+      "id": "no-unique-index-wallet-txn-charge",
+      "title": "No DB-enforced uniqueness on charge ids",
+      "hop": "Charging",
+      "impact": "Duplicate prevention depends on read-then-write under Redis locks; a lock lapse could let a duplicate in.",
+      "evidence": "companyWalletTransaction.schema.ts:94-105, locationWalletTransaction.schema.ts:64-69, charge.schema.ts:240-244 declare no unique chargeId/eventId index.",
+      "severity": "Medium"
+    },
+    {
+      "id": "provider-cost-recon-missing",
+      "title": "No provider cost reconciliation (Twilio, Meta/WhatsApp, Mailgun)",
+      "hop": "Reconciliation",
+      "impact": "Rebilled usage cannot be tied to provider invoices, so under-billing or margin leakage would go unnoticed; Meta/WhatsApp and Mailgun send no cost at all.",
+      "evidence": "cost is optional and producer-supplied (billing.dto.ts:79); no Meta/WhatsApp or Mailgun cost fields in billing or blade-platform.",
+      "severity": "Medium"
+    },
+    {
+      "id": "ledger-recon-amount-blind",
+      "title": "Ledger recon checks presence, not amount",
+      "hop": "Ledger",
+      "impact": "A ledger transfer with the wrong amount for a valid chargeId would pass reconciliation.",
+      "evidence": "ledgerReconGateway.service.ts:69 (ledger-recon branch) sums the wallet amount for matched charges.",
+      "severity": "Medium"
+    },
+    {
+      "id": "warehouse-export-completeness",
+      "title": "No completeness check on export to Snowflake / ClickHouse",
+      "hop": "Data export",
+      "impact": "Rows dropped or lagging in the warehouse would skew reporting and the ClickHouse-based reconciliations unnoticed.",
+      "evidence": "No row-count or amount tie-out to Mongo found in apps/; the Snowflake loader lives outside the workspace.",
+      "severity": "Medium"
+    },
+    {
+      "id": "free-tier-overshoot",
+      "title": "Free allowance and hard caps can be overshot",
+      "hop": "Charging",
+      "impact": "Concurrent usage can exceed a hard limit or free allowance because the limit is not re-checked at reserve time.",
+      "evidence": "apps/revex-wallet-gatekeeper reserve.ts:28-29 (INCRBYFLOAT, no re-check).",
+      "severity": "Low"
+    },
+    {
+      "id": "overdraft-by-design",
+      "title": "Funds check allows charges beyond the balance",
+      "hop": "Charging",
+      "impact": "Any single charge can push a wallet negative, creating receivables that rely on a later auto-recharge.",
+      "evidence": "companyWallet.service.ts:199-209 (hasFunds = credits>0 || balance>=0).",
+      "severity": "Low"
+    },
+    {
+      "id": "sdk-failure-on-parked-charge",
+      "title": "billevent/failure is accepted on a parked charge",
+      "hop": "Charging",
+      "impact": "If a caller releases a hold after Billing 5xx parked the charge, the retry sweep can still bill it later while the usage counter has already been released. Only caller discipline (never fail after BILL_RETRY_PENDING) prevents the mismatch.",
+      "evidence": "GoHighLevel/platform-core wallet-sdk README, \"Known gaps and roadmap\"; Gatekeeper follow-up. On master Gatekeeper does not emit BILL_RETRY_PENDING at all (only on fix/gatekeeper-error-contract), so callers can't tell a parked charge apart.",
+      "severity": "Medium"
+    },
+    {
+      "id": "sdk-validate-retry-duplicate-holds",
+      "title": "Retried validate calls can leave duplicate holds",
+      "hop": "Charging",
+      "impact": "Validate calls take no caller idempotency key. A retry after a timeout holds usage a second time, and the extra hold is only cleared at the billing window rollover, which can deny later usage early.",
+      "evidence": "GoHighLevel/platform-core wallet-sdk README, \"Known gaps and roadmap\"; the SDK refuses to retry validate calls on TIMEOUT/NETWORK for this reason.",
+      "severity": "Medium"
+    },
+    {
+      "id": "sdk-billing-5xx-not-parked",
+      "title": "Billing 5xx before the event record exists is not parked",
+      "hop": "Charging",
+      "impact": "The charge may never be retried by the sweep, and the caller gets Billing's raw error instead of BILL_RETRY_PENDING, so it cannot tell whether to release or wait.",
+      "evidence": "GoHighLevel/platform-core wallet-sdk README, \"Known gaps and roadmap\"; Gatekeeper follow-up.",
+      "severity": "Medium"
+    },
+    {
+      "id": "sdk-error-contract-unmerged",
+      "title": "SDK error codes and /sdk-config depend on an unmerged Gatekeeper PR",
+      "hop": "Charging",
+      "impact": "wallet-sdk 0.3.0 expects BILL_RETRY_PENDING, REBILLING_DISABLED and GET /sdk-config, which exist only on ghl-revex-backend#17529 (open). Against master those fall back to HTTP-status mapping and built-in defaults, and per-caller timeouts can't be changed.",
+      "evidence": "git grep on ghl-revex-backend master finds no sdk-config route and no BILL_RETRY_PENDING/REBILLING_DISABLED; both are on fix/gatekeeper-error-contract@4a9d074.",
+      "severity": "Medium"
+    },
+    {
+      "id": "sdk-mesh-retry-policy-unknown",
+      "title": "Istio retry policy for Gatekeeper not confirmed",
+      "hop": "Charging",
+      "impact": "Istio's default policy may already retry 503s on POSTs, which would repeat validate calls and create duplicate holds. SDK-level retries are on hold until this is known.",
+      "evidence": "GoHighLevel/platform-core wallet-sdk README, \"Known gaps and roadmap\"; \"Automatic retries: On hold\".",
+      "severity": "Low"
+    }
+  ]
+}

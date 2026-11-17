@@ -1,0 +1,412 @@
+{
+  "package": "@platform-core/wallet-sdk",
+  "version": "0.3.0",
+  "distTag": "beta",
+  "renamedFrom": "@platform-core/gatekeeper-sdk",
+  "summary": "The typed client a service uses to call revex-wallet-gatekeeper instead of a hand-rolled InternalRequest. One method per Gatekeeper route, every failure a typed WalletError with a stable code, client-side metrics per calling service and feature, and per-caller settings polled from Gatekeeper.",
+  "source": {
+    "repo": "platform-core",
+    "path": "wallet-sdk/README.md"
+  },
+  "readmeUrl": "https://github.com/GoHighLevel/platform-core/tree/master/wallet-sdk",
+  "gatekeeperPr": {
+    "number": 17529,
+    "url": "https://github.com/GoHighLevel/ghl-revex-backend/pull/17529",
+    "title": "fix(gatekeeper): make error responses machine-readable for callers",
+    "state": "Open"
+  },
+  "adoption": "No service outside platform-core lists either package name as a dependency (GitHub code search). Published on the beta tag only.",
+  "repos": {
+    "platform-core": {
+      "name": "platform-core",
+      "url": "https://github.com/GoHighLevel/platform-core",
+      "ref": "34d12559a6394b8e62b60b7e79d8105d276e2d67"
+    },
+    "revex-gk-error-contract": {
+      "name": "ghl-revex-backend (fix/gatekeeper-error-contract)",
+      "url": "https://github.com/GoHighLevel/ghl-revex-backend",
+      "ref": "4a9d074ee0790434fd01475522ddca82c24ee079",
+      "note": "unmerged"
+    }
+  },
+  "options": [
+    {
+      "name": "sourceId",
+      "required": true,
+      "defaultValue": "—",
+      "purpose": "The calling service's SERVICE_NAME. Sent as sourceId; metric label source_id."
+    },
+    {
+      "name": "module",
+      "required": true,
+      "defaultValue": "—",
+      "purpose": "The feature making the calls (sms-outbound, ai-agent). Metric label and x-gatekeeper-sdk-module header. Keep it low-cardinality: a feature name, never an id."
+    },
+    {
+      "name": "timeoutMs",
+      "required": false,
+      "defaultValue": "/sdk-config, else base-service default",
+      "purpose": "Per-call timeout. Setting it pins it, so Gatekeeper can no longer change it for this client."
+    },
+    {
+      "name": "metrics",
+      "required": false,
+      "defaultValue": "/sdk-config, else on",
+      "purpose": "Record SDK metrics. Setting it pins it."
+    },
+    {
+      "name": "version",
+      "required": false,
+      "defaultValue": "2021-07-28",
+      "purpose": "API version header."
+    },
+    {
+      "name": "remoteConfig",
+      "required": false,
+      "defaultValue": "true",
+      "purpose": "Poll Gatekeeper's /sdk-config. false turns it off; a custom ConfigSource replaces it."
+    }
+  ],
+  "methods": [
+    {
+      "name": "validateCompanyEvent",
+      "signature": "validateCompanyEvent({ companyId, product, subProduct?, reserveUsage?, reserve?, fundCheck? }, { throwOnDenied? })",
+      "httpMethod": "POST",
+      "route": "validate-event/company",
+      "holds": "Yes, on the company counter",
+      "safeToRepeat": false,
+      "note": "A denial throws ACCESS_DENIED even though Gatekeeper answers 200. A repeat holds again.",
+      "sdkRef": {
+        "repo": "platform-core",
+        "path": "wallet-sdk/src/client.ts",
+        "line": 241
+      }
+    },
+    {
+      "name": "validateLocationEvent",
+      "signature": "validateLocationEvent({ companyId, locationId, product, subProduct?, reserveUsage?, reserve?, fundCheck? }, { throwOnDenied? })",
+      "httpMethod": "POST",
+      "route": "validate-event/location",
+      "holds": "Yes, on the location counter",
+      "safeToRepeat": false,
+      "note": "Only location rules and the location counter apply.",
+      "sdkRef": {
+        "repo": "platform-core",
+        "path": "wallet-sdk/src/client.ts",
+        "line": 279
+      }
+    },
+    {
+      "name": "validateAndBillEvent",
+      "signature": "validateAndBillEvent({ companyId, locationId, product, subProduct?, reserveUsage?, chargeId, billing })",
+      "httpMethod": "POST",
+      "route": "validate-and-bill-event",
+      "holds": "Yes, then charges in the same call",
+      "safeToRepeat": false,
+      "note": "For billing after the fact. Billing dedups chargeId, but the hold repeats. Billing's ALREADY_PROCESSED returns replayed: true.",
+      "sdkRef": {
+        "repo": "platform-core",
+        "path": "wallet-sdk/src/client.ts",
+        "line": 309
+      }
+    },
+    {
+      "name": "billEventSuccess",
+      "signature": "billEventSuccess({ companyEventId, locationEventId?, chargeId, fundCheck?, ...billingPayload })",
+      "httpMethod": "PUT",
+      "route": "billevent/success",
+      "holds": "Settles the hold and charges",
+      "safeToRepeat": true,
+      "note": "Repeat with the same chargeId. A repeat (Gatekeeper answers 422) returns replayed: true. BILL_RETRY_PENDING means Billing will be retried: do not release.",
+      "sdkRef": {
+        "repo": "platform-core",
+        "path": "wallet-sdk/src/client.ts",
+        "line": 346
+      }
+    },
+    {
+      "name": "billEventFailure",
+      "signature": "billEventFailure({ companyEventId, locationEventId?, errorReason? })",
+      "httpMethod": "PUT",
+      "route": "billevent/failure",
+      "holds": "Releases the hold",
+      "safeToRepeat": true,
+      "note": "Never call it after BILL_RETRY_PENDING: Gatekeeper still accepts it on a parked charge.",
+      "sdkRef": {
+        "repo": "platform-core",
+        "path": "wallet-sdk/src/client.ts",
+        "line": 380
+      }
+    },
+    {
+      "name": "getLocationUsage",
+      "signature": "getLocationUsage(companyId, locationId, { forwardUserIdentity? })",
+      "httpMethod": "GET",
+      "route": "policy-schema/fetch/:companyId/:locationId",
+      "holds": "No",
+      "safeToRepeat": true,
+      "note": "Usage for dashboards. forwardUserIdentity: false strips the end user's authorization and source headers so Gatekeeper sees a service-to-service read.",
+      "sdkRef": {
+        "repo": "platform-core",
+        "path": "wallet-sdk/src/client.ts",
+        "line": 406
+      }
+    }
+  ],
+  "errors": [
+    {
+      "code": "ACCESS_DENIED",
+      "kind": "business",
+      "when": "Policy denied the action: validate calls (200) and validate-and-bill (400). Details: blockReasons, resumeAfterTimestamp.",
+      "action": "Block the action. Nothing is held."
+    },
+    {
+      "code": "BILL_RETRY_PENDING",
+      "kind": "business",
+      "when": "Billing returned 5xx; Gatekeeper parked the charge and its retry sweep will bill it.",
+      "action": "Do not call billEventFailure. Treat it as billed later.",
+      "needsGatekeeperPr": true
+    },
+    {
+      "code": "BILLING_REJECTED",
+      "kind": "business",
+      "when": "Billing refused the charge (4xx) and holds were released. Not used for ALREADY_PROCESSED.",
+      "action": "Don't repeat as-is. upstreamCode carries Billing's code."
+    },
+    {
+      "code": "REBILLING_DISABLED",
+      "kind": "business",
+      "when": "Opt-in was switched off since the hold; holds released.",
+      "action": "Stop the action.",
+      "needsGatekeeperPr": true
+    },
+    {
+      "code": "BILLING_SCOPE_MISMATCH",
+      "kind": "client",
+      "when": "Settle body names a different company, location or product than the hold.",
+      "action": "Fix the caller."
+    },
+    {
+      "code": "EVENT_STATE_CONFLICT",
+      "kind": "client",
+      "when": "Success on a failed event, or failure on a charged one.",
+      "action": "Don't repeat."
+    },
+    {
+      "code": "INVALID_EVENT_PAIR",
+      "kind": "client",
+      "when": "Company and location events don't belong together.",
+      "action": "Fix the caller."
+    },
+    {
+      "code": "USAGE_EVENT_NOT_FOUND",
+      "kind": "client",
+      "when": "Unknown eventId.",
+      "action": "Fix the caller."
+    },
+    {
+      "code": "INVALID_REQUEST",
+      "kind": "client",
+      "when": "Body failed validation (400/422).",
+      "action": "Fix the caller."
+    },
+    {
+      "code": "FORBIDDEN",
+      "kind": "client",
+      "when": "Caller is not inside the Istio mesh.",
+      "action": "Call from inside the mesh."
+    },
+    {
+      "code": "SDK_MISCONFIGURED",
+      "kind": "client",
+      "when": "WalletClient created without sourceId or module; thrown at boot.",
+      "action": "Fix the options."
+    },
+    {
+      "code": "RESERVATION_FAILED",
+      "kind": "transport",
+      "when": "Holding usage failed and was rolled back.",
+      "action": "Safe to repeat."
+    },
+    {
+      "code": "RATE_LIMITED",
+      "kind": "transport",
+      "when": "429.",
+      "action": "Back off and repeat if retryable."
+    },
+    {
+      "code": "UNAVAILABLE",
+      "kind": "transport",
+      "when": "503 from Gatekeeper or the mesh.",
+      "action": "Back off and repeat if retryable."
+    },
+    {
+      "code": "TIMEOUT",
+      "kind": "transport",
+      "when": "No response in time.",
+      "action": "Settle calls: repeat. Validate calls: don't, the hold may exist."
+    },
+    {
+      "code": "NETWORK",
+      "kind": "transport",
+      "when": "Connection failed (ECONNRESET and similar).",
+      "action": "As TIMEOUT."
+    },
+    {
+      "code": "INTERNAL",
+      "kind": "transport",
+      "when": "Any other server error.",
+      "action": "Report with traceId."
+    }
+  ],
+  "remoteConfig": {
+    "route": {
+      "repo": "revex-gk-error-contract",
+      "path": "apps/revex-wallet-gatekeeper/src/controllers/gatekeeper.controller.ts",
+      "line": 275
+    },
+    "onGatekeeperMaster": false,
+    "sets": [
+      "timeoutMs (clamped 100–10000 ms)",
+      "metrics on/off",
+      "minSdkVersion (below it: one DeprecationWarning, never blocked)"
+    ],
+    "precedence": [
+      "Explicit WalletClient option",
+      "overrides[\"<sourceId>/<module>\"]",
+      "overrides[\"<sourceId>\"]",
+      "default",
+      "Built-in defaults"
+    ],
+    "polling": [
+      {
+        "label": "First fetch",
+        "value": "Random 0–5 s after the client is created"
+      },
+      {
+        "label": "Interval",
+        "value": "60 s ±20% jitter"
+      },
+      {
+        "label": "Unchanged config",
+        "value": "If-None-Match on version; Gatekeeper answers 304"
+      },
+      {
+        "label": "Gatekeeper failing",
+        "value": "Keeps the last good config; backs off 120 s → 240 s → 300 s max"
+      },
+      {
+        "label": "No config yet or invalid",
+        "value": "Built-in defaults. A config problem never fails a call"
+      }
+    ],
+    "changeHow": "Static in apps/revex-wallet-gatekeeper/src/constants/sdkConfig.ts on the PR branch: edit it, bump version, deploy Gatekeeper. Until that PR merges the route doesn't exist, so every SDK client runs on built-in defaults."
+  },
+  "metrics": [
+    {
+      "name": "gatekeeper_sdk_requests",
+      "type": "counter",
+      "labels": "operation, outcome, error_code, status_code, source_id, module, sdk_version"
+    },
+    {
+      "name": "gatekeeper_sdk_request_duration_ms",
+      "type": "histogram",
+      "labels": "same; buckets 5 ms … 30 s"
+    }
+  ],
+  "headers": [
+    {
+      "name": "x-gatekeeper-sdk-version",
+      "carries": "SDK version, read from package.json at runtime"
+    },
+    {
+      "name": "x-gatekeeper-sdk-module",
+      "carries": "The caller's module option"
+    }
+  ],
+  "semantics": [
+    {
+      "title": "Mesh failures are only visible here",
+      "detail": "A 503 or timeout from Istio never reaches Gatekeeper's logs. The SDK metrics count every call client-side, including 200 denials."
+    },
+    {
+      "title": "reserve: false is stricter on funds",
+      "detail": "It runs the same policy and free-limit checks as a holding validate plus a funds check whenever the usage would be billable. A holding validate runs the funds check only for entities with no policy document and no template, so a governed entity can pass a hold on a negative balance and fail here."
+    },
+    {
+      "title": "hasFunds is the policy verdict",
+      "detail": "On an allowed validate it is always true, even on a negative balance. Read balance and complimentaryCredits to judge the wallet."
+    },
+    {
+      "title": "fundCheck: false counts usage that already happened",
+      "detail": "Gatekeeper holds and counts the usage past a balance or usage-limit denial instead of refusing. For post-usage charges on products allowed to bill past an empty wallet."
+    },
+    {
+      "title": "A repeated settle is a replay, not an error",
+      "detail": "Gatekeeper documents an idempotent settle as 200 but answers 422; the SDK reads both as replayed: true. Other 422s still throw."
+    },
+    {
+      "title": "runBillable is switched off",
+      "detail": "The validate → run → settle helper is commented out in 0.3.0. The six direct methods are the only supported path."
+    }
+  ],
+  "billableFlow": {
+    "id": "sdk_billable_action",
+    "name": "A billable action through wallet-sdk",
+    "group": "SDK",
+    "trigger": "A product is about to do billable work (send an SMS, run an AI step)",
+    "steps": [
+      {
+        "name": "validate",
+        "title": "validateCompanyEvent / validateLocationEvent",
+        "kind": "service",
+        "repo": "calling service",
+        "detail": "With reserveUsage. A denial throws ACCESS_DENIED."
+      },
+      {
+        "name": "gk_validate",
+        "title": "POST validate-event: check policy and funds, hold usage, return eventId",
+        "kind": "api",
+        "repo": "revex",
+        "path": "apps/revex-wallet-gatekeeper/src/controllers/gatekeeper.controller.ts",
+        "line": 68
+      },
+      {
+        "name": "work",
+        "title": "Do the billable work",
+        "kind": "service",
+        "repo": "calling service"
+      },
+      {
+        "name": "settle",
+        "title": "billEventSuccess with real usage, or billEventFailure if the work failed",
+        "kind": "service",
+        "repo": "calling service"
+      },
+      {
+        "name": "gk_settle",
+        "title": "PUT billevent/success: settle the hold to metricCount",
+        "kind": "api",
+        "repo": "revex",
+        "path": "apps/revex-wallet-gatekeeper/src/controllers/gatekeeper.controller.ts",
+        "line": 141
+      },
+      {
+        "name": "billing",
+        "title": "Billing charges the wallet",
+        "kind": "api",
+        "repo": "billing"
+      }
+    ],
+    "terminal": {
+      "success": [
+        "Charged with real usage; a repeat returns replayed: true"
+      ],
+      "failure": [
+        "ACCESS_DENIED: block the action, nothing held",
+        "Work failed: billEventFailure releases the hold",
+        "BILL_RETRY_PENDING: charge parked, never call billEventFailure"
+      ]
+    }
+  }
+}
