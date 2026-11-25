@@ -146,6 +146,11 @@ const tiles = [
     body: 'Step-by-step journeys with the API, worker or cron behind every state.'
   },
   {
+    tab: 'charges',
+    title: 'Charge types & billing models',
+    body: 'Which products bill the wallet first and deliver later, and which deliver first and bill later.'
+  },
+  {
     tab: 'surfaces',
     title: 'APIs & workers',
     body: 'Every route, Pub/Sub worker and cron across the wallet apps.'

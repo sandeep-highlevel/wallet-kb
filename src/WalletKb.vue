@@ -85,6 +85,7 @@
           <div :key="tab">
             <KbOverview v-if="tab === 'overview'" @navigate="go" />
             <KbFlows v-else-if="tab === 'flows'" :selected="item" @select="(id) => go('flows', id)" />
+            <KbChargeTypes v-else-if="tab === 'charges'" :selected="item" @select="(id) => go('charges', id)" />
             <KbSurfaces v-else-if="tab === 'surfaces'" :selected="item" @select="(id) => go('surfaces', id)" />
             <KbCollections v-else-if="tab === 'collections'" :key="item" :selected="item" />
             <KbControls v-else-if="tab === 'controls'" />
@@ -129,6 +130,8 @@ import KbControls from './kb/components/KbControls.vue'
 import KbDataPipeline from './kb/components/KbDataPipeline.vue'
 import KbReferences from './kb/components/KbReferences.vue'
 import KbWalletSdk from './kb/components/KbWalletSdk.vue'
+import KbChargeTypes from './kb/components/KbChargeTypes.vue'
+import { CHARGE_TYPE_VIEWS, MODELS } from './kb/chargeModels'
 import { APPS, COLLECTIONS, CONTROL_GAPS, CONTROLS, DATAFLOW, FLOWS, WALLET_SDK } from './kb/kbData'
 import { PINNED_REPOS } from './kb/kbLinks'
 import { buildSearchIndex, type SearchEntry } from './kb/kbSearch'
@@ -140,6 +143,7 @@ import { prefersReducedMotion } from './composables/motion'
 const TABS = [
   { id: 'overview', label: 'Overview', title: 'Overview', blurb: '' },
   { id: 'flows', label: 'Wallet flows', count: FLOWS.length, title: 'Wallet flows', blurb: 'Step-by-step journeys with the API, worker or cron behind every state.' },
+  { id: 'charges', label: 'Charge types', count: CHARGE_TYPE_VIEWS.length, title: 'Charge types & billing models', blurb: 'Which products bill the wallet first and deliver later, and which deliver first and bill later, for every charge type.' },
   { id: 'surfaces', label: 'APIs & workers', title: 'APIs & workers', blurb: 'Every route, Pub/Sub worker and cron across the wallet apps.' },
   { id: 'collections', label: 'Collections', count: COLLECTIONS.length, title: 'Collections & indexes', blurb: 'MongoDB collections, key fields, indexes and who uses them.' },
   { id: 'controls', label: 'Controls & gaps', count: CONTROLS.length, title: 'Controls & gaps', blurb: 'What keeps each hop complete and accurate, what is automated, and what is missing.' },
@@ -163,7 +167,11 @@ const current = computed(() => TABS.find((t) => t.id === tab.value) ?? TABS[0])
 function go(nextTab: string, nextItem?: string) {
   router.push({ query: { ...route.query, tab: nextTab, item: nextItem || undefined } })
 }
-watch([tab, item], () => window.scrollTo({ top: 0, behavior: prefersReducedMotion() ? 'auto' : 'smooth' }))
+// Charge types open in a drawer, so picking one must not scroll the page.
+watch([tab, item], ([t], [prevTab]) => {
+  if (t === 'charges' && t === prevTab) return
+  window.scrollTo({ top: 0, behavior: prefersReducedMotion() ? 'auto' : 'smooth' })
+})
 
 const shortSha = (key: string) => (PINNED_REPOS[key]?.ref || '').slice(0, 7)
 
@@ -194,7 +202,14 @@ const mainEl = ref<HTMLElement | null>(null)
 const { scan } = useReveal(mainEl)
 
 // ── Search ─────────────────────────────────────────────────────────────
-const index = buildSearchIndex({
+const chargeEntries: SearchEntry[] = CHARGE_TYPE_VIEWS.map((r): SearchEntry => ({
+  kind: 'charge type' as SearchEntry['kind'],
+  title: r.chargeType,
+  subtitle: `${r.product} · ${MODELS.find((m) => m.id === r.model)?.title ?? r.model}`,
+  target: { tab: 'charges', item: r.chargeType },
+  haystack: [r.chargeType, r.product, r.app, r.family, r.model.replace('_', ' '), ...(r.displayNames || [])].filter(Boolean).join(' ').toLowerCase()
+}))
+const index = [...chargeEntries, ...buildSearchIndex({
   flows: FLOWS,
   apps: APPS,
   collections: COLLECTIONS,
@@ -203,7 +218,7 @@ const index = buildSearchIndex({
   controls: CONTROLS,
   gaps: CONTROL_GAPS,
   sdk: WALLET_SDK
-})
+})]
 const searchOpen = ref(false)
 function pick(h: SearchEntry) {
   searchOpen.value = false

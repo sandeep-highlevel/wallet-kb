@@ -3,7 +3,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import WalletKb from '../src/WalletKb.vue'
 
-const TABS = ['overview', 'flows', 'surfaces', 'collections', 'controls', 'data', 'sdk', 'references']
+const TABS = ['overview', 'flows', 'charges', 'surfaces', 'collections', 'controls', 'data', 'sdk', 'references']
 
 async function render(query: string) {
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/', component: WalletKb }] })
